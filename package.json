@@ -1,0 +1,35 @@
+{
+  "name": "sep-compliance-validator",
+  "version": "0.1.0",
+  "description": "Automated conformance checks for Stellar anchor SEP implementations (SEP-1, SEP-10, and more)",
+  "type": "module",
+  "bin": {
+    "sep-compliance-validator": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^13.1.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "smol-toml": "^1.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
