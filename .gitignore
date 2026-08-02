@@ -1,0 +1,17 @@
+# Local Claude Code working instructions - not project documentation
+CLAUDE.md
+.claude/
+
+# Node
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
