@@ -1,5 +1,7 @@
 # SEP Compliance Validator
 
+[![CI](https://github.com/solaawojobi00-bit/sep-compliance-validator/actions/workflows/ci.yml/badge.svg)](https://github.com/solaawojobi00-bit/sep-compliance-validator/actions/workflows/ci.yml)
+
 Automated conformance checks for Stellar anchor [SEP](https://github.com/stellar/stellar-protocol/tree/master/ecosystem)
 implementations. Point it at an anchor's home domain and it verifies that the
 anchor's SEP-1 (`stellar.toml`) and SEP-10 (web authentication) endpoints
