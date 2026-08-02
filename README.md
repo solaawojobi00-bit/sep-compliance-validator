@@ -1,0 +1,48 @@
+# SEP Compliance Validator
+
+Automated conformance checks for Stellar anchor [SEP](https://github.com/stellar/stellar-protocol/tree/master/ecosystem)
+implementations. Point it at an anchor's home domain and it verifies that the
+anchor's SEP-1 (`stellar.toml`) and SEP-10 (web authentication) endpoints
+actually behave per spec — not just that the anchor *claims* to support them.
+
+See [PRD.md](./PRD.md) for scope/goals and [ARCHITECTURE.md](./ARCHITECTURE.md)
+for design details.
+
+## Status
+
+Phase 1 (this repo's current state): SEP-1 discovery/validation and the full
+SEP-10 challenge/response flow, including negative-case handling (wrong
+signer, wrong home domain, malformed JWT). Later phases (SEP-38, SEP-12,
+SEP-24, mainnet support, CI packaging) are tracked as GitHub issues.
+
+## Install & use
+
+```bash
+npm install
+npm run build
+node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json]
+```
+
+### Example
+
+```bash
+node dist/cli.js check testanchor.stellar.org --network testnet
+```
+
+Runs against [Stellar's official testnet reference anchor](https://testanchor.stellar.org)
+and prints a pass/fail table for every check, e.g.:
+
+```
+SEP Compliance Report for testanchor.stellar.org (testnet)
+...
+12/12 passed, 0 failed, 0 warnings
+```
+
+The process exits non-zero if any check fails, so it can be used as a CI gate.
+
+## Development
+
+```bash
+npm test        # run the test suite (vitest)
+npm run build   # compile TypeScript to dist/
+```
