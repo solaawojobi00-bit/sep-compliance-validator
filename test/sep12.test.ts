@@ -1,0 +1,241 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runSep12Checks } from "../src/checks/sep12.js";
+import type { StellarToml } from "../src/checks/sep1.js";
+
+describe("runSep12Checks", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const domain = "example.com";
+  const jwt = "fake.jwt.token";
+  const validToml: StellarToml = {
+    raw: {
+      KYC_SERVER: "https://kyc.example.com",
+    },
+    kycServer: "https://kyc.example.com",
+  };
+
+  it("passes all checks for a well-formed SEP-12 KYC provider", async () => {
+    const customerId = "cust_12345";
+
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+
+      // Check auth header
+      const headers = init?.headers as Record<string, string>;
+      expect(headers?.Authorization).toBe(`Bearer ${jwt}`);
+
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address === "not-an-email-address") {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ error: "Invalid email_address" }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: customerId,
+            status: "ACCEPTED",
+          }),
+        } as Response;
+      }
+
+      if (url === `https://kyc.example.com/customer?id=${customerId}`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: customerId,
+            status: "ACCEPTED",
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    expect(results).toHaveLength(3);
+    expect(results.every((r) => r.status === "pass")).toBe(true);
+  });
+
+  it("falls back to TRANSFER_SERVER when KYC_SERVER is not declared", async () => {
+    const transferToml: StellarToml = {
+      raw: {
+        TRANSFER_SERVER: "https://transfer.example.com",
+      },
+      transferServer: "https://transfer.example.com",
+    };
+
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.startsWith("https://transfer.example.com/customer")) {
+        if (init?.method === "PUT") {
+          const body = JSON.parse((init.body as string) || "{}");
+          if (body.email_address === "not-an-email-address") {
+            return { ok: false, status: 400 } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ id: "c1", status: "PROCESSING" }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "c1", status: "PROCESSING" }),
+        } as Response;
+      }
+      throw new Error(`Unexpected request to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: transferToml,
+      network: "testnet",
+      jwt,
+    });
+
+    expect(results.every((r) => r.status === "pass")).toBe(true);
+  });
+
+  it("skips checks when neither KYC_SERVER nor TRANSFER_SERVER is declared", async () => {
+    const emptyToml: StellarToml = { raw: {} };
+    const results = await runSep12Checks({
+      domain,
+      toml: emptyToml,
+      network: "testnet",
+      jwt,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe("sep12.skipped");
+    expect(results[0].status).toBe("warn");
+  });
+
+  it("skips checks when JWT is missing", async () => {
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt: "",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe("sep12.skipped");
+    expect(results[0].status).toBe("warn");
+  });
+
+  it("fails when PUT /customer returns non-standard status", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cust_123", status: "UNKNOWN_STATUS" }),
+        } as Response;
+      }
+      return { ok: false, status: 400 } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const putCheck = results.find((r) => r.id === "sep12.put_customer");
+    expect(putCheck?.status).toBe("fail");
+  });
+
+  it("fails when PUT /customer silently accepts malformed email_address", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address === "not-an-email-address") {
+          // Silently accepts with status ACCEPTED
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ id: "cust_123", status: "ACCEPTED" }),
+          } as Response;
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cust_123", status: "ACCEPTED" }),
+        } as Response;
+      }
+      if (url.includes("/customer?id=cust_123")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cust_123", status: "ACCEPTED" }),
+        } as Response;
+      }
+      throw new Error(`Unexpected url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const malformedCheck = results.find((r) => r.id === "sep12.put_malformed_field");
+    expect(malformedCheck?.status).toBe("fail");
+  });
+
+  it("fails when GET /customer returns a mismatched customer id", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        const body = JSON.parse(init?.body as string);
+        if (body.email_address === "not-an-email-address") {
+          return { ok: false, status: 400 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cust_123", status: "ACCEPTED" }),
+        } as Response;
+      }
+      if (url.includes("/customer?id=cust_123")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "different_cust_id", status: "ACCEPTED" }),
+        } as Response;
+      }
+      throw new Error(`Unexpected url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const getCheck = results.find((r) => r.id === "sep12.get_customer");
+    expect(getCheck?.status).toBe("fail");
+  });
+});

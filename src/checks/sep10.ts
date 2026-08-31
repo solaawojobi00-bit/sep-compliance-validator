@@ -8,6 +8,11 @@ export interface Sep10Options {
   domain: string;
   toml: StellarToml;
   network: "testnet" | "mainnet";
+  onJwt?: (jwt: string) => void;
+}
+
+export interface Sep10Result extends Array<CheckResult> {
+  jwt?: string;
 }
 
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
@@ -19,8 +24,8 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> {
   return JSON.parse(payloadJson) as Record<string, unknown>;
 }
 
-export async function runSep10Checks(opts: Sep10Options): Promise<CheckResult[]> {
-  const results: CheckResult[] = [];
+export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
+  const results: Sep10Result = [];
   const { domain, toml } = opts;
   const networkPassphrase =
     opts.network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
@@ -187,6 +192,8 @@ export async function runSep10Checks(opts: Sep10Options): Promise<CheckResult[]>
       return results;
     }
     jwt = body.token;
+    results.jwt = jwt;
+    opts.onJwt?.(jwt);
     results.push({
       id: "sep10.submit_challenge",
       description: "Submit signed challenge and receive a JWT",
