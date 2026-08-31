@@ -42,9 +42,12 @@ SEP Compliance Report for testanchor.stellar.org (testnet)
 
 The process exits non-zero if any check fails, so it can be used as a CI gate.
 
-## Development
+## Contributing & Development
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for local dev setup instructions and a step-by-step walkthrough on how to add a checker for a new SEP.
 
 ```bash
 npm test        # run the test suite (vitest)
 npm run build   # compile TypeScript to dist/
 ```
+
