@@ -22,15 +22,34 @@ program
   .argument("<domain>", "Anchor home domain, e.g. example.com")
   .option("-n, --network <network>", "testnet or mainnet", "testnet")
   .option("-f, --format <format>", "output format: table or json", "table")
-  .action(async (domain: string, options: { network: string; format: string }) => {
-    const network = options.network === "mainnet" ? "mainnet" : "testnet";
-    const results: CheckResult[] = [];
+  .option("--client-domain <domain>", "Client domain for SEP-10 client_domain verification")
+  .action(
+    async (
+      domain: string,
+      options: { network: string; format: string; clientDomain?: string },
+    ) => {
+      const network = options.network === "mainnet" ? "mainnet" : "testnet";
+      const results: CheckResult[] = [];
 
-    const { toml, results: sep1Results } = await fetchStellarToml(domain);
-    results.push(...sep1Results);
+      const { toml, results: sep1Results } = await fetchStellarToml(domain);
+      results.push(...sep1Results);
 
-    const sep10Results = await runSep10Checks({ domain, toml, network });
-    results.push(...sep10Results);
+      let clientSigningKey: string | undefined;
+      if (options.clientDomain) {
+        const { toml: clientToml, results: clientTomlResults } =
+          await fetchStellarToml(options.clientDomain);
+        results.push(...clientTomlResults);
+        clientSigningKey = clientToml.signingKey;
+      }
+
+      const sep10Results = await runSep10Checks({
+        domain,
+        toml,
+        network,
+        clientDomain: options.clientDomain,
+        clientSigningKey,
+      });
+      results.push(...sep10Results);
 
     const sep10Succeeded =
       Boolean(sep10Results.jwt) && !sep10Results.some((r) => r.status === "fail");
