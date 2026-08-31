@@ -8,12 +8,20 @@ const domain = "example.com";
 const webAuthEndpoint = "https://example.com/auth";
 const webAuthDomain = new URL(webAuthEndpoint).host;
 
-function fakeJwt(sub: string, expiresInSeconds = 3600): string {
+function fakeJwt(
+  sub: string,
+  expiresInSeconds = 3600,
+  extraClaims: Record<string, unknown> = {},
+): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString(
     "base64url",
   );
   const payload = Buffer.from(
-    JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + expiresInSeconds }),
+    JSON.stringify({
+      sub,
+      exp: Math.floor(Date.now() / 1000) + expiresInSeconds,
+      ...extraClaims,
+    }),
   ).toString("base64url");
   return `${header}.${payload}.`;
 }
@@ -182,5 +190,120 @@ describe("runSep10Checks", () => {
     const results = await runSep10Checks({ domain, toml, network: "testnet" });
     const expiry = results.find((r) => r.id === "sep10.jwt_expiry");
     expect(expiry?.status).toBe("fail");
+  });
+
+  it("passes full client_domain verification flow with signed extra operation", async () => {
+    const clientDomain = "wallet.example.com";
+    const clientDomainKeypair = Keypair.random();
+    let capturedAccount = "";
+    let capturedClientDomain = "";
+
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        capturedAccount = url.searchParams.get("account")!;
+        capturedClientDomain = url.searchParams.get("client_domain")!;
+
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+          null,
+          capturedClientDomain,
+          clientDomainKeypair.publicKey(),
+        );
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      // Check submitted transaction
+      const body = JSON.parse(init.body as string);
+      const submittedTx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+      expect(submittedTx.signatures.length).toBe(3); // server, client, clientDomain
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          token: fakeJwt(capturedAccount, 3600, { client_domain: clientDomain }),
+        }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      clientDomain,
+      clientDomainKeypair,
+    });
+
+    expect(capturedClientDomain).toBe(clientDomain);
+    const opCheck = results.find((r) => r.id === "sep10.client_domain_operation");
+    const sigCheck = results.find((r) => r.id === "sep10.client_domain_signature");
+    const jwtCheck = results.find((r) => r.id === "sep10.jwt_client_domain");
+
+    expect(opCheck?.status).toBe("pass");
+    expect(sigCheck?.status).toBe("pass");
+    expect(jwtCheck?.status).toBe("pass");
+    expect(results.filter((r) => r.status === "fail")).toEqual([]);
+  });
+
+  it("fails when client_domain is requested but missing from challenge transaction", async () => {
+    const clientDomain = "wallet.example.com";
+    const clientDomainKeypair = Keypair.random();
+
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        const account = url.searchParams.get("account")!;
+
+        // Standard challenge WITHOUT client_domain
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt("GABC") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      clientDomain,
+      clientDomainKeypair,
+    });
+
+    const opCheck = results.find((r) => r.id === "sep10.client_domain_operation");
+    expect(opCheck?.status).toBe("fail");
   });
 });

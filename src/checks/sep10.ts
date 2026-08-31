@@ -8,6 +8,9 @@ export interface Sep10Options {
   domain: string;
   toml: StellarToml;
   network: "testnet" | "mainnet";
+  clientDomain?: string;
+  clientSigningKey?: string;
+  clientDomainKeypair?: Keypair;
   onJwt?: (jwt: string) => void;
 }
 
@@ -53,6 +56,9 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     const url = new URL(webAuthEndpoint);
     url.searchParams.set("account", clientKeypair.publicKey());
     url.searchParams.set("home_domain", domain);
+    if (opts.clientDomain) {
+      url.searchParams.set("client_domain", opts.clientDomain);
+    }
     const res = await fetchWithTimeout(url.toString());
     if (!res.ok) {
       results.push({
@@ -121,8 +127,9 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
   // number zero, correct source account, Manage Data operations, timebounds,
   // home domain, and that it's signed by the anchor's SIGNING_KEY).
   let parsedClientAccountId: string;
+  let parsedChallengeTx: any;
   try {
-    const { clientAccountID } = WebAuth.readChallengeTx(
+    const { tx: readTx, clientAccountID } = WebAuth.readChallengeTx(
       challengeXdr,
       signingKey,
       networkPassphrase,
@@ -130,6 +137,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       webAuthDomain,
     );
     parsedClientAccountId = clientAccountID;
+    parsedChallengeTx = readTx;
     results.push({
       id: "sep10.challenge_structure",
       description:
@@ -167,11 +175,91 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
         },
   );
 
+  if (opts.clientDomain) {
+    const clientDomainOp = (
+      parsedChallengeTx?.operations as Array<{
+        type: string;
+        name?: string;
+        value?: Buffer | string;
+        source?: string;
+      }>
+    )?.find((op) => op.type === "manageData" && op.name === "client_domain");
+
+    if (!clientDomainOp) {
+      results.push({
+        id: "sep10.client_domain_operation",
+        description:
+          "Challenge transaction includes client_domain Manage Data operation",
+        status: "fail",
+        severity: "error",
+        message: 'Challenge transaction missing "client_domain" Manage Data operation',
+      });
+    } else {
+      const valStr = Buffer.isBuffer(clientDomainOp.value)
+        ? clientDomainOp.value.toString("utf-8")
+        : String(clientDomainOp.value ?? "");
+      const expectedKey =
+        opts.clientSigningKey ?? opts.clientDomainKeypair?.publicKey();
+      const valueMatches = valStr === opts.clientDomain;
+      const sourceMatches =
+        !expectedKey || clientDomainOp.source === expectedKey;
+
+      if (valueMatches && sourceMatches) {
+        results.push({
+          id: "sep10.client_domain_operation",
+          description:
+            "Challenge transaction includes client_domain Manage Data operation",
+          status: "pass",
+          severity: "error",
+          message: `client_domain Manage Data operation present with value "${valStr}" and source ${clientDomainOp.source}`,
+        });
+      } else {
+        results.push({
+          id: "sep10.client_domain_operation",
+          description:
+            "Challenge transaction includes client_domain Manage Data operation",
+          status: "fail",
+          severity: "error",
+          message: `client_domain operation mismatch: value="${valStr}" (expected "${opts.clientDomain}"), source=${clientDomainOp.source} (expected ${expectedKey ?? "any"})`,
+        });
+      }
+    }
+  }
+
   // 4. Sign the challenge as the client and submit it for a JWT.
   let jwt: string;
   try {
     const tx = TransactionBuilder.fromXDR(challengeXdr, networkPassphrase);
     tx.sign(clientKeypair);
+    if (opts.clientDomainKeypair) {
+      tx.sign(opts.clientDomainKeypair);
+      const isSigned = tx.signatures.some((s) => {
+        try {
+          return opts.clientDomainKeypair!.verify(tx.hash(), s.signature());
+        } catch {
+          return false;
+        }
+      });
+      results.push(
+        isSigned
+          ? {
+              id: "sep10.client_domain_signature",
+              description:
+                "Challenge transaction is signed by client_domain keypair",
+              status: "pass",
+              severity: "error",
+              message: `Signed by client_domain keypair ${opts.clientDomainKeypair.publicKey()}`,
+            }
+          : {
+              id: "sep10.client_domain_signature",
+              description:
+                "Challenge transaction is signed by client_domain keypair",
+              status: "fail",
+              severity: "error",
+              message: "Failed to sign with client_domain keypair",
+            },
+      );
+    }
     const res = await fetchWithTimeout(webAuthEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -254,6 +342,32 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
             message: `exp claim missing or not in the future (exp=${exp}, now=${now})`,
           },
     );
+
+    if (opts.clientDomain) {
+      const jwtClientDomain =
+        typeof payload.client_domain === "string"
+          ? payload.client_domain
+          : undefined;
+      results.push(
+        jwtClientDomain === opts.clientDomain
+          ? {
+              id: "sep10.jwt_client_domain",
+              description:
+                'JWT "client_domain" claim matches requested client domain',
+              status: "pass",
+              severity: "error",
+              message: `client_domain = ${jwtClientDomain}`,
+            }
+          : {
+              id: "sep10.jwt_client_domain",
+              description:
+                'JWT "client_domain" claim matches requested client domain',
+              status: "fail",
+              severity: "error",
+              message: `Expected client_domain to be "${opts.clientDomain}", got "${jwtClientDomain}"`,
+            },
+      );
+    }
   } catch (err) {
     results.push({
       id: "sep10.jwt_decode",
