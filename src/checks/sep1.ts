@@ -7,6 +7,7 @@ export interface StellarToml {
   webAuthEndpoint?: string;
   signingKey?: string;
   networkPassphrase?: string;
+  anchorQuoteServer?: string;
 }
 
 export async function fetchStellarToml(
@@ -132,8 +133,11 @@ export async function fetchStellarToml(
         },
   );
 
+  const anchorQuoteServer =
+    typeof raw.ANCHOR_QUOTE_SERVER === "string" ? raw.ANCHOR_QUOTE_SERVER : undefined;
+
   return {
-    toml: { raw, webAuthEndpoint, signingKey, networkPassphrase },
+    toml: { raw, webAuthEndpoint, signingKey, networkPassphrase, anchorQuoteServer },
     results,
   };
 }
