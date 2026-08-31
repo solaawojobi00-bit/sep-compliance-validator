@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { fetchStellarToml } from "./checks/sep1.js";
 import { runSep10Checks } from "./checks/sep10.js";
 import { runSep12Checks } from "./checks/sep12.js";
+import { runSep24Checks } from "./checks/sep24.js";
 import { runSep38Checks } from "./checks/sep38.js";
 import type { CheckResult, Report } from "./core/report.js";
 import { summarize } from "./core/report.js";
@@ -13,12 +14,12 @@ const program = new Command();
 
 program
   .name("sep-compliance-validator")
-  .description("Validate a Stellar anchor's SEP-1/SEP-10/SEP-12/SEP-38 implementation against spec")
+  .description("Validate a Stellar anchor's SEP-1/SEP-10/SEP-12/SEP-24/SEP-38 implementation against spec")
   .version("0.1.0");
 
 program
   .command("check")
-  .description("Run SEP-1, SEP-10, SEP-12, and SEP-38 conformance checks against an anchor's home domain")
+  .description("Run SEP-1, SEP-10, SEP-12, SEP-24, and SEP-38 conformance checks against an anchor's home domain")
   .argument("<domain>", "Anchor home domain, e.g. example.com")
   .option("-n, --network <network>", "testnet or mainnet", "testnet")
   .option("-f, --format <format>", "output format: table or json", "table")
@@ -70,6 +71,22 @@ program
         jwt: sep10Results.jwt!,
       });
       results.push(...sep12Results);
+    }
+
+    const sep24Server =
+      toml.transferServerSep24 ??
+      (typeof toml.raw.TRANSFER_SERVER_SEP0024 === "string"
+        ? toml.raw.TRANSFER_SERVER_SEP0024
+        : undefined);
+
+    if (sep10Succeeded && sep24Server) {
+      const sep24Results = await runSep24Checks({
+        domain,
+        toml,
+        network,
+        jwt: sep10Results.jwt!,
+      });
+      results.push(...sep24Results);
     }
 
     const quoteServer =
