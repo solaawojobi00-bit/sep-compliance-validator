@@ -43,11 +43,21 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 - `-n, --network <testnet|mainnet>`: Target network (default: `testnet`).
 - `--i-understand-this-touches-production`: Required confirmation flag when running against `mainnet` to prevent unintended validation against production anchor infrastructure.
 - `-f, --format <table|json|html>`: Output format (default: `table`).
+- `-o, --output <file>`: Write rendered report to a file instead of stdout.
+- `--only <seps>`: Comma-separated list of SEPs to validate (e.g. `sep1,sep10`).
+- `--fail-on-warn`: Exit with status 1 if any check generates a warning.
+- `-v, --verbose`: Print detailed HTTP request and response diagnostics to stderr.
 - `--client-domain <domain>`: Client domain to exercise SEP-10 `client_domain` verification.
 - `-t, --timeout <ms>`: Request timeout in milliseconds (default: `10000`).
 - `--interactive-browser`: Run headless browser automation (Playwright) against SEP-24 interactive URL to validate forms and completion callbacks. Requires Playwright (`npm install playwright && npx playwright install chromium`).
 - `--memo <id>`: Numeric ID memo for SEP-10 challenge authentication to validate custodial wallet flows.
 - `--muxed`: Authenticate using a muxed (`M...`) account for SEP-10.
+
+### Exit Codes
+
+- `0`: All checks passed (or warnings produced when `--fail-on-warn` is omitted).
+- `1`: One or more checks failed (or produced warnings when `--fail-on-warn` is active).
+- `2`: CLI usage / argument validation error.
 
 ### Example
 
