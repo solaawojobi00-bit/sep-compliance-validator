@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { Networks, StrKey } from "@stellar/stellar-sdk";
 import { parse } from "smol-toml";
 import { fetchWithTimeout } from "../core/http.js";
@@ -5,6 +6,7 @@ import type { CheckResult } from "../core/report.js";
 
 export interface StellarToml {
   raw: Record<string, unknown>;
+  version?: string;
   webAuthEndpoint?: string;
   signingKey?: string;
   networkPassphrase?: string;
@@ -84,17 +86,102 @@ export async function fetchStellarToml(
   let text: string;
   try {
     const res = await fetchWithTimeout(url, {}, timeoutMs);
+    const requestedHost = new URL(url).host;
+    let redirectedHost: string | undefined;
+    try {
+      if (res.url && new URL(res.url).host !== requestedHost) {
+        redirectedHost = new URL(res.url).host;
+      }
+    } catch {}
+
+    const redirectInfo = redirectedHost ? ` (redirected to ${res.url})` : "";
+
     if (!res.ok) {
       results.push({
         id: "sep1.fetch",
         description: "Fetch stellar.toml from /.well-known/stellar.toml",
         status: "fail",
         severity: "error",
-        message: `Received HTTP ${res.status} fetching ${url}`,
+        message: `Received HTTP ${res.status} fetching ${url}${redirectInfo}`,
       });
       return { toml: { raw: {} }, results };
     }
+
+    results.push({
+      id: "sep1.fetch",
+      description: "Fetch stellar.toml from /.well-known/stellar.toml",
+      status: "pass",
+      severity: "error",
+      message: `Fetched ${url}${redirectInfo}`,
+    });
+
+    // CORS check: Access-Control-Allow-Origin: * (required by SEP-1)
+    const cors = res.headers?.get?.("access-control-allow-origin");
+    if (cors === "*") {
+      results.push({
+        id: "sep1.cors_header",
+        description: "stellar.toml is served with Access-Control-Allow-Origin: *",
+        status: "pass",
+        severity: "error",
+        message: "Access-Control-Allow-Origin is set to *",
+      });
+    } else {
+      results.push({
+        id: "sep1.cors_header",
+        description: "stellar.toml is served with Access-Control-Allow-Origin: *",
+        status: "fail",
+        severity: "error",
+        message: cors
+          ? `Access-Control-Allow-Origin is "${cors}", expected "*"`
+          : "Access-Control-Allow-Origin header is missing (required by SEP-1 for browser access)",
+      });
+    }
+
+    // Content-Type check: text/plain (recommended by SEP-1)
+    const contentType = res.headers?.get?.("content-type");
+    const mime = contentType ? contentType.toLowerCase().split(";")[0].trim() : "";
+    if (mime === "text/plain") {
+      results.push({
+        id: "sep1.content_type",
+        description: "stellar.toml is served with Content-Type: text/plain",
+        status: "pass",
+        severity: "warning",
+        message: `Content-Type is "${contentType}"`,
+      });
+    } else {
+      results.push({
+        id: "sep1.content_type",
+        description: "stellar.toml is served with Content-Type: text/plain",
+        status: "warn",
+        severity: "warning",
+        message: contentType
+          ? `Content-Type is "${contentType}", recommended is "text/plain"`
+          : 'Content-Type header is missing, recommended is "text/plain"',
+      });
+    }
+
     text = await res.text();
+
+    // File size check: max 100KB (102400 bytes)
+    const byteLength = Buffer.byteLength(text, "utf-8");
+    const MAX_BYTES = 100 * 1024;
+    if (byteLength <= MAX_BYTES) {
+      results.push({
+        id: "sep1.file_size",
+        description: "stellar.toml size is within 100KB limit",
+        status: "pass",
+        severity: "error",
+        message: `stellar.toml size is ${byteLength} bytes (within 100KB limit)`,
+      });
+    } else {
+      results.push({
+        id: "sep1.file_size",
+        description: "stellar.toml size is within 100KB limit",
+        status: "fail",
+        severity: "error",
+        message: `stellar.toml size of ${byteLength} bytes exceeds the 100KB limit (${MAX_BYTES} bytes)`,
+      });
+    }
   } catch (err) {
     results.push({
       id: "sep1.fetch",
@@ -105,14 +192,6 @@ export async function fetchStellarToml(
     });
     return { toml: { raw: {} }, results };
   }
-
-  results.push({
-    id: "sep1.fetch",
-    description: "Fetch stellar.toml from /.well-known/stellar.toml",
-    status: "pass",
-    severity: "error",
-    message: `Fetched ${url}`,
-  });
 
   const parsed = parseStellarToml(text, network);
   results.push(...parsed.results);
@@ -127,6 +206,12 @@ export function parseStellarToml(
   results: CheckResult[];
 } {
   const results: CheckResult[] = [];
+  const isHtml =
+    /^\s*<!DOCTYPE\s+html/i.test(text) ||
+    /^\s*<html/i.test(text) ||
+    /<html[\s>]/i.test(text) ||
+    /<\/html>/i.test(text);
+
   let raw: Record<string, unknown>;
   try {
     raw = parse(text) as Record<string, unknown>;
@@ -136,7 +221,9 @@ export function parseStellarToml(
       description: "Parse stellar.toml as valid TOML",
       status: "fail",
       severity: "error",
-      message: `TOML parse error: ${(err as Error).message}`,
+      message: isHtml
+        ? "Endpoint served HTML instead of a valid stellar.toml file"
+        : `TOML parse error: ${(err as Error).message}`,
     });
     return { toml: { raw: {} }, results };
   }
@@ -148,6 +235,29 @@ export function parseStellarToml(
     severity: "error",
     message: "stellar.toml parsed successfully",
   });
+
+  // Validate VERSION
+  const version = typeof raw.VERSION === "string" ? raw.VERSION : undefined;
+  results.push(
+    version
+      ? {
+          id: "sep1.version",
+          description: "stellar.toml declares VERSION",
+          status: "pass",
+          severity: "error",
+          message: `VERSION = ${version}`,
+        }
+      : {
+          id: "sep1.version",
+          description: "stellar.toml declares VERSION",
+          status: "fail",
+          severity: "error",
+          message:
+            raw.VERSION !== undefined
+              ? `VERSION "${String(raw.VERSION)}" is not a string`
+              : "VERSION is missing from stellar.toml (required by SEP-1)",
+        },
+  );
 
   // Validate WEB_AUTH_ENDPOINT
   const webAuthEndpoint = validateHttpsUrl(
@@ -350,6 +460,7 @@ export function parseStellarToml(
   return {
     toml: {
       raw,
+      version,
       webAuthEndpoint,
       signingKey,
       networkPassphrase,

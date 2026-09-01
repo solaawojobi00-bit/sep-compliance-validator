@@ -3,7 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchStellarToml, parseStellarToml } from "../src/checks/sep1.js";
 
 function mockFetch(response: Partial<Response>) {
-  global.fetch = vi.fn().mockResolvedValue(response) as unknown as typeof fetch;
+  const headers =
+    response.headers ??
+    new Headers({
+      "access-control-allow-origin": "*",
+      "content-type": "text/plain",
+    });
+  const defaultResponse = {
+    headers,
+    ...response,
+  };
+  global.fetch = vi.fn().mockResolvedValue(defaultResponse) as unknown as typeof fetch;
 }
 
 describe("fetchStellarToml", () => {
@@ -13,6 +23,7 @@ describe("fetchStellarToml", () => {
 
   it("passes all checks for a well-formed stellar.toml", async () => {
     const toml = `
+VERSION="2.0.0"
 WEB_AUTH_ENDPOINT="https://example.com/auth"
 SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
 NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
@@ -20,6 +31,7 @@ NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
     mockFetch({ ok: true, text: async () => toml } as Response);
 
     const { results, toml: parsed } = await fetchStellarToml("example.com");
+    expect(parsed.version).toBe("2.0.0");
     expect(parsed.webAuthEndpoint).toBe("https://example.com/auth");
     expect(parsed.signingKey).toBe("GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7");
     expect(results.every((r) => r.status === "pass")).toBe(true);
@@ -310,5 +322,137 @@ SIGNING_KEY = "${validKey}"
     expect(results.some((r) => r.id === "sep1.accounts")).toBe(false);
   });
 });
+
+describe("SEP-1 HTTP serving requirements and VERSION", () => {
+  const validToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+WEB_AUTH_ENDPOINT = "https://auth.example.com"
+`;
+
+  it("passes when VERSION is declared as a string", () => {
+    const { results, toml } = parseStellarToml(validToml);
+    expect(toml.version).toBe("2.0.0");
+    const check = results.find((r) => r.id === "sep1.version");
+    expect(check?.status).toBe("pass");
+  });
+
+  it("fails when VERSION is absent", () => {
+    const tomlWithoutVersion = `
+SIGNING_KEY = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+`;
+    const { results } = parseStellarToml(tomlWithoutVersion);
+    const check = results.find((r) => r.id === "sep1.version");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain("VERSION is missing");
+  });
+
+  it("fails when VERSION is not a string", () => {
+    const tomlWithNumericVersion = `
+VERSION = 2
+SIGNING_KEY = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+`;
+    const { results } = parseStellarToml(tomlWithNumericVersion);
+    const check = results.find((r) => r.id === "sep1.version");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain("not a string");
+  });
+
+  it("passes CORS check when Access-Control-Allow-Origin is *", async () => {
+    mockFetch({
+      ok: true,
+      headers: new Headers({
+        "access-control-allow-origin": "*",
+        "content-type": "text/plain",
+      }),
+      text: async () => validToml,
+    } as Response);
+
+    const { results } = await fetchStellarToml("example.com");
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("pass");
+  });
+
+  it("fails CORS check when Access-Control-Allow-Origin is missing or not *", async () => {
+    mockFetch({
+      ok: true,
+      headers: new Headers({
+        "access-control-allow-origin": "https://example.com",
+        "content-type": "text/plain",
+      }),
+      text: async () => validToml,
+    } as Response);
+
+    const { results } = await fetchStellarToml("example.com");
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("fail");
+    expect(corsCheck?.message).toContain('expected "*"');
+  });
+
+  it("passes Content-Type check when text/plain (with or without charset)", async () => {
+    mockFetch({
+      ok: true,
+      headers: new Headers({
+        "access-control-allow-origin": "*",
+        "content-type": "text/plain; charset=utf-8",
+      }),
+      text: async () => validToml,
+    } as Response);
+
+    const { results } = await fetchStellarToml("example.com");
+    const typeCheck = results.find((r) => r.id === "sep1.content_type");
+    expect(typeCheck?.status).toBe("pass");
+  });
+
+  it("warns when Content-Type is not text/plain", async () => {
+    mockFetch({
+      ok: true,
+      headers: new Headers({
+        "access-control-allow-origin": "*",
+        "content-type": "application/octet-stream",
+      }),
+      text: async () => validToml,
+    } as Response);
+
+    const { results } = await fetchStellarToml("example.com");
+    const typeCheck = results.find((r) => r.id === "sep1.content_type");
+    expect(typeCheck?.status).toBe("warn");
+    expect(typeCheck?.message).toContain("application/octet-stream");
+  });
+
+  it("fails when file size exceeds 100KB", async () => {
+    const hugeToml = validToml + "\n# " + "A".repeat(105 * 1024);
+    mockFetch({
+      ok: true,
+      text: async () => hugeToml,
+    } as Response);
+
+    const { results } = await fetchStellarToml("example.com");
+    const sizeCheck = results.find((r) => r.id === "sep1.file_size");
+    expect(sizeCheck?.status).toBe("fail");
+    expect(sizeCheck?.message).toContain("exceeds the 100KB limit");
+  });
+
+  it("surfaces final URL when request is redirected to another host", async () => {
+    mockFetch({
+      ok: true,
+      url: "https://www.circle.com/.well-known/stellar.toml",
+      text: async () => validToml,
+    } as Response);
+
+    const { results } = await fetchStellarToml("circle.com");
+    const fetchCheck = results.find((r) => r.id === "sep1.fetch");
+    expect(fetchCheck?.message).toContain("redirected to https://www.circle.com/.well-known/stellar.toml");
+  });
+
+  it("explicitly identifies HTML response when TOML parse fails", () => {
+    const htmlBody = `<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>`;
+    const { results } = parseStellarToml(htmlBody);
+    const parseCheck = results.find((r) => r.id === "sep1.parse");
+    expect(parseCheck?.status).toBe("fail");
+    expect(parseCheck?.message).toContain("Endpoint served HTML instead of a valid stellar.toml");
+  });
+});
+
 
 
