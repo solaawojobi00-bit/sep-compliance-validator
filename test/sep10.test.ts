@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Keypair, MuxedAccount, Networks, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Account, Keypair, MuxedAccount, Networks, Operation, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import * as jose from "jose";
 import { runSep10Checks } from "../src/checks/sep10.js";
 import type { StellarToml } from "../src/checks/sep1.js";
@@ -50,7 +50,9 @@ describe("runSep10Checks", () => {
     global.fetch = vi.fn(async (_input, init) => {
       if (!init || init.method === undefined) {
         const url = new URL(_input as string);
-        capturedAccount = url.searchParams.get("account")!;
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+        }
         const challengeXdr = WebAuth.buildChallengeTx(
           serverKeypair,
           capturedAccount,
@@ -249,7 +251,9 @@ describe("runSep10Checks", () => {
 
       if (!init || init.method === undefined) {
         const url = new URL(urlStr);
-        capturedAccount = url.searchParams.get("account")!;
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+        }
         capturedClientDomain = url.searchParams.get("client_domain")!;
 
         const challengeXdr = WebAuth.buildChallengeTx(
@@ -919,4 +923,227 @@ describe("SEP-10 JWT claims validation (iss, iat, sub)", () => {
     expect(subCheck?.message).toContain("muxed account");
   });
 });
+
+describe("SEP-10 challenge nonce randomness and uniqueness", () => {
+  const serverKeypair = Keypair.random();
+  const toml: StellarToml = {
+    raw: {},
+    webAuthEndpoint,
+    signingKey: serverKeypair.publicKey(),
+    networkPassphrase: Networks.TESTNET,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function buildCustomChallenge(
+    clientPublicKey: string,
+    nonceValue: string | Buffer,
+  ): string {
+    const account = new Account(serverKeypair.publicKey(), "-1");
+    const now = Math.floor(Date.now() / 1000);
+    const tx = new TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+      timebounds: { minTime: now, maxTime: now + 300 },
+    })
+      .addOperation(
+        Operation.manageData({
+          name: `${domain} auth`,
+          value: nonceValue,
+          source: clientPublicKey,
+        }),
+      )
+      .addOperation(
+        Operation.manageData({
+          name: "web_auth_domain",
+          value: webAuthDomain,
+          source: serverKeypair.publicKey(),
+        }),
+      )
+      .build();
+    tx.sign(serverKeypair);
+    return tx.toXDR();
+  }
+
+  it("passes when nonces are unique and properly formatted across two requests", async () => {
+    let callCount = 0;
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        if (url.pathname.includes(".well-known/jwks.json")) {
+          return { ok: false, status: 404 } as Response;
+        }
+        callCount++;
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt("any") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    expect(callCount).toBe(2);
+
+    const formatCheck = results.find((r) => r.id === "sep10.challenge_nonce_format");
+    const uniqueCheck = results.find((r) => r.id === "sep10.challenge_nonce_unique");
+
+    expect(formatCheck?.status).toBe("pass");
+    expect(uniqueCheck?.status).toBe("pass");
+  });
+
+  it("fails when identical nonces are returned across two requests (replay risk)", async () => {
+    const fixedNonce = "cZgTAntdR+E4LnWI5FjXUWiz0WxqkDqUJsOmWVarS27y5214To8IbWgaEVLNuQSB";
+
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = buildCustomChallenge(account, fixedNonce);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt("any") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const uniqueCheck = results.find((r) => r.id === "sep10.challenge_nonce_unique");
+    expect(uniqueCheck?.status).toBe("fail");
+    expect(uniqueCheck?.severity).toBe("error");
+    expect(uniqueCheck?.message).toContain("REPLAY RISK");
+  });
+
+  it("fails when nonce is not a 64-character base64 string decoding to 48 bytes", async () => {
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        const account = url.searchParams.get("account")!;
+        const shortNonce = "c2hvcnQtbm9uY2U="; // short base64
+        const challengeXdr = buildCustomChallenge(account, shortNonce);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt("any") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const formatCheck = results.find((r) => r.id === "sep10.challenge_nonce_format");
+    expect(formatCheck?.status).toBe("fail");
+    expect(formatCheck?.severity).toBe("error");
+    expect(formatCheck?.message).toContain("Expected 64-character base64 nonce decoding to 48 bytes");
+  });
+
+  it("warns when nonce has low entropy (e.g. all identical bytes)", async () => {
+    const lowEntropyBuf = Buffer.alloc(48, 0x41); // 48 'A's
+    const lowEntropyNonce = lowEntropyBuf.toString("base64"); // 64 chars
+
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = buildCustomChallenge(account, lowEntropyNonce);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt("any") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const formatCheck = results.find((r) => r.id === "sep10.challenge_nonce_format");
+    expect(formatCheck?.status).toBe("warn");
+    expect(formatCheck?.severity).toBe("warning");
+    expect(formatCheck?.message).toContain("low-entropy data");
+  });
+
+  it("degrades to warn when second challenge request fails with network error", async () => {
+    let getCount = 0;
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        getCount++;
+        if (getCount === 1) {
+          const url = new URL(_input as string);
+          const account = url.searchParams.get("account")!;
+          const challengeXdr = WebAuth.buildChallengeTx(
+            serverKeypair,
+            account,
+            domain,
+            300,
+            Networks.TESTNET,
+            webAuthDomain,
+          );
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              transaction: challengeXdr,
+              network_passphrase: Networks.TESTNET,
+            }),
+          } as Response;
+        }
+        throw new Error("Second request connection timeout");
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt("any") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const uniqueCheck = results.find((r) => r.id === "sep10.challenge_nonce_unique");
+    expect(uniqueCheck?.status).toBe("warn");
+    expect(uniqueCheck?.severity).toBe("warning");
+    expect(uniqueCheck?.message).toContain("second challenge request failed");
+  });
+});
+
 

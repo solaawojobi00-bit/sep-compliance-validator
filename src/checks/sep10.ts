@@ -177,7 +177,137 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     });
   }
 
-  // 3. Validate the challenge transaction's structure via the SDK (sequence
+  // 3. Inspect challenge transaction operations directly to validate nonce format, entropy, and uniqueness
+  // independently of SDK readChallengeTx internals.
+  let rawChallengeTx: any;
+  let op0: { value?: Buffer | string } | undefined;
+  try {
+    rawChallengeTx = TransactionBuilder.fromXDR(challengeXdr, networkPassphrase);
+    op0 = rawChallengeTx.operations[0] as { value?: Buffer | string } | undefined;
+  } catch {}
+
+  const nonceBuf = Buffer.isBuffer(op0?.value)
+    ? op0!.value
+    : Buffer.from(String(op0?.value ?? ""), "utf-8");
+  const nonceStr = nonceBuf.toString("utf-8");
+  let decodedBytes: Buffer | undefined;
+  try {
+    if (/^[A-Za-z0-9+/=]+$/.test(nonceStr)) {
+      decodedBytes = Buffer.from(nonceStr, "base64");
+    }
+  } catch {}
+
+  if (nonceStr.length !== 64 || !decodedBytes || decodedBytes.length !== 48) {
+    results.push({
+      id: "sep10.challenge_nonce_format",
+      description:
+        "Challenge nonce is 64-character base64 string decoding to 48 bytes",
+      status: "fail",
+      severity: "error",
+      message: `Expected 64-character base64 nonce decoding to 48 bytes, got ${nonceStr.length} chars (${decodedBytes?.length ?? 0} bytes)`,
+    });
+  } else {
+    const uniqueBytes = new Set(decodedBytes).size;
+    const isAllPrintableAscii = Array.from(decodedBytes).every(
+      (b) => b >= 0x20 && b <= 0x7e,
+    );
+    if (uniqueBytes <= 4 || isAllPrintableAscii) {
+      results.push({
+        id: "sep10.challenge_nonce_format",
+        description:
+          "Challenge nonce is 64-character base64 string decoding to 48 bytes",
+        status: "warn",
+        severity: "warning",
+        message: `Challenge nonce decodes to low-entropy data (${uniqueBytes} unique bytes, all-ASCII: ${isAllPrintableAscii})`,
+      });
+    } else {
+      results.push({
+        id: "sep10.challenge_nonce_format",
+        description:
+          "Challenge nonce is 64-character base64 string decoding to 48 bytes",
+        status: "pass",
+        severity: "error",
+        message: `Nonce is 64-character base64 string decoding to 48 random bytes (${uniqueBytes} unique bytes)`,
+      });
+    }
+  }
+
+  // Verify challenge nonce uniqueness across distinct client accounts
+  const secondClientKeypair = Keypair.random();
+  try {
+    const secondUrl = new URL(webAuthEndpoint);
+    secondUrl.searchParams.set("account", secondClientKeypair.publicKey());
+    secondUrl.searchParams.set("home_domain", domain);
+    if (opts.clientDomain) {
+      secondUrl.searchParams.set("client_domain", opts.clientDomain);
+    }
+    const secondRes = await fetchWithTimeout(
+      secondUrl.toString(),
+      {},
+      opts.timeoutMs,
+    );
+    if (!secondRes.ok) {
+      results.push({
+        id: "sep10.challenge_nonce_unique",
+        description: "Challenge nonce is unique across separate requests",
+        status: "warn",
+        severity: "warning",
+        message: `Could not verify nonce uniqueness: second challenge request returned HTTP ${secondRes.status}`,
+      });
+    } else {
+      const secondBody = (await secondRes.json()) as { transaction?: string };
+      if (!secondBody.transaction) {
+        results.push({
+          id: "sep10.challenge_nonce_unique",
+          description: "Challenge nonce is unique across separate requests",
+          status: "warn",
+          severity: "warning",
+          message:
+            "Could not verify nonce uniqueness: second challenge response missing transaction field",
+        });
+      } else {
+        const secondTx = TransactionBuilder.fromXDR(
+          secondBody.transaction,
+          networkPassphrase,
+        );
+        const secondOp0 = secondTx.operations[0] as
+          | { value?: Buffer | string }
+          | undefined;
+        const secondNonceBuf = Buffer.isBuffer(secondOp0?.value)
+          ? secondOp0!.value
+          : Buffer.from(String(secondOp0?.value ?? ""), "utf-8");
+        const secondNonceStr = secondNonceBuf.toString("utf-8");
+
+        if (secondNonceStr === nonceStr) {
+          results.push({
+            id: "sep10.challenge_nonce_unique",
+            description: "Challenge nonce is unique across separate requests",
+            status: "fail",
+            severity: "error",
+            message: `REPLAY RISK: Server returned identical challenge nonce across two requests for distinct client accounts ("${nonceStr}")`,
+          });
+        } else {
+          results.push({
+            id: "sep10.challenge_nonce_unique",
+            description: "Challenge nonce is unique across separate requests",
+            status: "pass",
+            severity: "error",
+            message: "Challenge nonces are unique across distinct requests",
+          });
+        }
+      }
+    }
+  } catch (err) {
+    results.push({
+      id: "sep10.challenge_nonce_unique",
+      description: "Challenge nonce is unique across separate requests",
+      status: "warn",
+      severity: "warning",
+      message: `Could not verify nonce uniqueness: second challenge request failed (${(err as Error).message})`,
+    });
+  }
+
+  // 4. Validate the challenge transaction's structure via the SDK (sequence
   // number zero, correct source account, Manage Data operations, timebounds,
   // home domain, and that it's signed by the anchor's SIGNING_KEY).
   let parsedClientAccountId: string;
