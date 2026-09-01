@@ -25,12 +25,13 @@ are tracked as GitHub issues.
 ```bash
 npm install
 npm run build
-node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json|html] [--client-domain <domain>] [--timeout <ms>]
+node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json|html] [--client-domain <domain>] [--timeout <ms>] [--i-understand-this-touches-production]
 ```
 
 ### CLI Options
 
 - `-n, --network <testnet|mainnet>`: Target network (default: `testnet`).
+- `--i-understand-this-touches-production`: Required confirmation flag when running against `mainnet` to prevent unintended validation against production anchor infrastructure.
 - `-f, --format <table|json|html>`: Output format (default: `table`).
 - `--client-domain <domain>`: Client domain to exercise SEP-10 `client_domain` verification.
 - `-t, --timeout <ms>`: Request timeout in milliseconds (default: `10000`).

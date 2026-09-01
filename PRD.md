@@ -59,8 +59,9 @@ Given an anchor's home domain, the tool will:
 4. **CLI entry point** — `npx sep-compliance-validator check <domain>`, runnable
    with zero local setup beyond Node.js, against real Stellar testnet anchors.
 
-v1 is scoped to run against **testnet** anchors only (mainnet is read-only/opt-in
-in a later phase, since mainnet SEP-10 auth has stricter operational implications).
+5. **Mainnet validation (supported, opt-in)** — `--network mainnet` is supported
+   with an explicit confirmation flag (`--i-understand-this-touches-production`)
+   to prevent unintended test runs against live production anchor infrastructure.
 
 ## Out of Scope (v1)
 
@@ -73,4 +74,3 @@ in a later phase, since mainnet SEP-10 auth has stricter operational implication
   deferred, may remain out of scope permanently or sandboxed only).
 - Hosted public dashboard / leaderboard of tested anchors (Phase 3).
 - GitHub Action / CI packaging for anchor repos (Phase 2/3).
-- Mainnet validation runs (Phase 2+, opt-in, read-only checks only).
