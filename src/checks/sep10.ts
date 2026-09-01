@@ -15,6 +15,7 @@ export interface Sep10Options {
   clientSigningKey?: string;
   clientDomainKeypair?: Keypair;
   jwksUri?: string;
+  timeoutMs?: number;
   onJwt?: (jwt: string) => void;
 }
 
@@ -72,7 +73,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     if (opts.clientDomain) {
       url.searchParams.set("client_domain", opts.clientDomain);
     }
-    const res = await fetchWithTimeout(url.toString());
+    const res = await fetchWithTimeout(url.toString(), {}, opts.timeoutMs);
     if (!res.ok) {
       results.push({
         id: "sep10.challenge_request",
@@ -306,11 +307,15 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
             },
       );
     }
-    const res = await fetchWithTimeout(webAuthEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transaction: tx.toXDR() }),
-    });
+    const res = await fetchWithTimeout(
+      webAuthEndpoint,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transaction: tx.toXDR() }),
+      },
+      opts.timeoutMs,
+    );
     const body = (await res.json().catch(() => ({}))) as {
       token?: string;
       error?: string;
@@ -472,7 +477,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     if (!resolvedJwksUri) {
       const probeUrl = `https://${webAuthDomain}/.well-known/jwks.json`;
       try {
-        const probeRes = await fetchWithTimeout(probeUrl);
+        const probeRes = await fetchWithTimeout(probeUrl, {}, opts.timeoutMs);
         if (probeRes.ok) {
           const probeData = (await probeRes.json().catch(() => null)) as {
             keys?: unknown[];
@@ -497,7 +502,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       });
     } else {
       try {
-        const jwksRes = await fetchWithTimeout(resolvedJwksUri);
+        const jwksRes = await fetchWithTimeout(resolvedJwksUri, {}, opts.timeoutMs);
         if (!jwksRes.ok) {
           results.push({
             id: "sep10.jwt_signature",

@@ -652,4 +652,29 @@ describe("runSep10Checks", () => {
     expect(sigCheck?.status).toBe("warn");
     expect(sigCheck?.message).toContain("no JWKS endpoint declared");
   });
+
+  it("fails fast when challenge request exceeds configured timeoutMs", async () => {
+    global.fetch = vi.fn(async (_url, init) => {
+      return new Promise<Response>((resolve, reject) => {
+        const signal = (init as RequestInit)?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      timeoutMs: 25,
+    });
+    const reqCheck = results.find((r) => r.id === "sep10.challenge_request");
+    expect(reqCheck?.status).toBe("fail");
+    expect(reqCheck?.message).toContain("timed out after 25ms");
+  });
 });

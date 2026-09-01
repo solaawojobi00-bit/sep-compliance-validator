@@ -16,13 +16,14 @@ export interface StellarToml {
 
 export async function fetchStellarToml(
   domain: string,
+  timeoutMs?: number,
 ): Promise<{ toml: StellarToml; results: CheckResult[] }> {
   const results: CheckResult[] = [];
   const url = `https://${domain}/.well-known/stellar.toml`;
 
   let text: string;
   try {
-    const res = await fetchWithTimeout(url);
+    const res = await fetchWithTimeout(url, {}, timeoutMs);
     if (!res.ok) {
       results.push({
         id: "sep1.fetch",

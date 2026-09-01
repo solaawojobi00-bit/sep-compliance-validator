@@ -59,4 +59,23 @@ NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
     const parseCheck = results.find((r) => r.id === "sep1.parse");
     expect(parseCheck?.status).toBe("fail");
   });
+
+  it("fails fast when fetch exceeds the configured timeoutMs", async () => {
+    global.fetch = vi.fn(async (_url, init) => {
+      return new Promise<Response>((resolve, reject) => {
+        const signal = (init as RequestInit)?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    }) as unknown as typeof fetch;
+
+    const { results } = await fetchStellarToml("slow.example.com", 25);
+    expect(results[0].status).toBe("fail");
+    expect(results[0].message).toContain("timed out after 25ms");
+  });
 });
