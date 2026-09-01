@@ -7,6 +7,7 @@ export interface Sep12Options {
   toml: StellarToml;
   network: "testnet" | "mainnet";
   jwt: string;
+  timeoutMs?: number;
 }
 
 const VALID_SEP12_STATUSES = ["ACCEPTED", "PROCESSING", "NEEDS_INFO", "REJECTED"] as const;
@@ -65,7 +66,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         last_name: "Doe",
         email_address: "jane.doe@example.com",
       }),
-    });
+    }, opts.timeoutMs);
 
     if (!putRes.ok) {
       results.push({
@@ -119,7 +120,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         headers: {
           ...authHeader,
         },
-      });
+      }, opts.timeoutMs);
 
       if (!getRes.ok) {
         results.push({
@@ -186,7 +187,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         last_name: "Doe",
         email_address: "not-an-email-address",
       }),
-    });
+    }, opts.timeoutMs);
 
     if (invalidPutRes.status === 400 || (invalidPutRes.status >= 400 && invalidPutRes.status < 500)) {
       results.push({

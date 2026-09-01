@@ -238,4 +238,31 @@ describe("runSep12Checks", () => {
     const getCheck = results.find((r) => r.id === "sep12.get_customer");
     expect(getCheck?.status).toBe("fail");
   });
+
+  it("fails fast when customer request exceeds configured timeoutMs", async () => {
+    global.fetch = vi.fn(async (_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = (init as RequestInit)?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+      timeoutMs: 25,
+    });
+    const putCheck = results.find((r) => r.id === "sep12.put_customer");
+    expect(putCheck?.status).toBe("fail");
+    expect(putCheck?.message).toContain("timed out after 25ms");
+  });
 });
+

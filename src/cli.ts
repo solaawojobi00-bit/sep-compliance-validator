@@ -146,6 +146,7 @@ program
                 toml: toml!,
                 network,
                 jwt: (sep10Results as any).jwt!,
+                timeoutMs,
               });
             });
             results.push(...sep12Results);
@@ -179,7 +180,12 @@ program
 
           if (quoteServer) {
             const sep38Results = await guardChecker("sep38", "Validate SEP-38 quote endpoints", async () => {
-              return await runSep38Checks({ domain, toml: toml!, network });
+              return await runSep38Checks({
+                domain,
+                toml: toml!,
+                network,
+                timeoutMs,
+              });
             });
             results.push(...sep38Results);
           }

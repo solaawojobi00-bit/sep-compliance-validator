@@ -301,4 +301,30 @@ describe("runSep38Checks", () => {
     );
     expect(expiresAtCheck?.status).toBe("fail");
   });
+
+  it("fails fast when /info request exceeds configured timeoutMs", async () => {
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = (init as RequestInit)?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      timeoutMs: 25,
+    });
+    const infoCheck = results.find((r) => r.id === "sep38.info");
+    expect(infoCheck?.status).toBe("fail");
+    expect(infoCheck?.message).toContain("timed out after 25ms");
+  });
 });
+

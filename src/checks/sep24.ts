@@ -83,7 +83,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
 
   // 1. GET /info endpoint check
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/info`);
+    const res = await fetchWithTimeout(`${baseUrl}/info`, {}, opts.timeoutMs);
     if (!res.ok) {
       results.push({
         id: "sep24.info",
@@ -182,6 +182,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
           asset_code: depositAssetCode,
         }),
       },
+      opts.timeoutMs,
     );
 
     if (!depositRes.ok) {
@@ -252,9 +253,13 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
           message: `Interactive URL protocol must be https:, got: ${parsedUrl.protocol}`,
         });
       } else {
-        const urlCheckRes = await fetchWithTimeout(interactiveUrl, {
-          method: "GET",
-        });
+        const urlCheckRes = await fetchWithTimeout(
+          interactiveUrl,
+          {
+            method: "GET",
+          },
+          opts.timeoutMs,
+        );
 
         // 2xx, 3xx, or 4xx (e.g. auth/cookie prompt) indicates server reachable; 5xx is server error
         if (urlCheckRes.status >= 500) {
@@ -306,11 +311,15 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
   if (transactionId) {
     try {
       const txUrl = `${baseUrl}/transaction?id=${encodeURIComponent(transactionId)}`;
-      const txRes = await fetchWithTimeout(txUrl, {
-        headers: {
-          ...authHeader,
+      const txRes = await fetchWithTimeout(
+        txUrl,
+        {
+          headers: {
+            ...authHeader,
+          },
         },
-      });
+        opts.timeoutMs,
+      );
 
       if (!txRes.ok) {
         results.push({
