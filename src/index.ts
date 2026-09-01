@@ -10,9 +10,14 @@ export type { StellarToml, Currency, Documentation } from "./checks/sep1.js";
 // SEP-10
 export {
   runSep10Checks,
+  runSep10NegativeChecks,
   MAX_CHALLENGE_TIMEOUT_SECONDS,
 } from "./checks/sep10.js";
-export type { Sep10Options, Sep10Result } from "./checks/sep10.js";
+export type {
+  Sep10Options,
+  Sep10Result,
+  Sep10NegativeOptions,
+} from "./checks/sep10.js";
 
 // SEP-12
 export { runSep12Checks } from "./checks/sep12.js";
