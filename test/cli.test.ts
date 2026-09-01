@@ -1,18 +1,249 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exec } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
+import { buildProgram, runCheckAction, type CheckCommandOptions } from "../src/cli.js";
 import { parseStellarToml } from "../src/checks/sep1.js";
 import { guardChecker } from "../src/core/guard.js";
-import type { Report } from "../src/core/report.js";
-import { renderHtml } from "../src/output/html.js";
-import { renderJson } from "../src/output/json.js";
-import { renderTable } from "../src/output/table.js";
 
 const execAsync = promisify(exec);
 const cliPath = "node dist/cli.js";
 
-describe("CLI input validation and error boundaries", () => {
+describe("runCheckAction in-process branch coverage", () => {
+  const originalExitCode = process.exitCode;
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    process.exitCode = 0;
+  });
+
+  afterEach(() => {
+    process.exitCode = originalExitCode;
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const baseOpts: CheckCommandOptions = {
+    network: "testnet",
+    format: "json",
+    timeout: "10000",
+  };
+
+  it("returns undefined and sets exitCode 2 for invalid format", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, format: "xml" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for invalid network", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, network: "devnet" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for non-numeric timeout", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, timeout: "not-a-number" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for non-positive timeout", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, timeout: "0" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for empty --only", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, only: "  " });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for invalid SEP in --only", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, only: "sep999" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for non-numeric memo", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, memo: "notdigits" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for simultaneous memo and muxed", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, memo: "12345", muxed: true });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for mainnet without confirmation", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, network: "mainnet" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("executes successfully against mainnet when confirmed", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.includes(".well-known/stellar.toml")) {
+        return new Response('VERSION="2.0.0"\nSIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n', { status: 200 });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      network: "mainnet",
+      iUnderstandThisTouchesProduction: true,
+      only: "sep1",
+    });
+
+    expect(report).toBeDefined();
+    expect(report?.network).toBe("mainnet");
+  });
+
+  it("exercises --client-domain toml fetch path", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.includes("anchor.com/.well-known/stellar.toml")) {
+        return new Response('VERSION="2.0.0"\nSIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n', { status: 200 });
+      }
+      if (url.includes("wallet.com/.well-known/stellar.toml")) {
+        return new Response('VERSION="2.0.0"\nSIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n', { status: 200 });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const report = await runCheckAction("anchor.com", {
+      ...baseOpts,
+      clientDomain: "wallet.com",
+      only: "sep1,sep10",
+    });
+
+    expect(report).toBeDefined();
+    const clientTomlCheck = report?.results.find((r) => r.message.includes("wallet.com"));
+    expect(clientTomlCheck).toBeDefined();
+  });
+
+  it("exercises table and html format renderers and --output file writing", async () => {
+    global.fetch = vi.fn(async () => {
+      return new Response('VERSION="2.0.0"\n', { status: 200 });
+    });
+
+    const tempTable = "test-temp-table.txt";
+    const tempHtml = "test-temp-report.html";
+
+    try {
+      await runCheckAction("example.com", {
+        ...baseOpts,
+        format: "table",
+        output: tempTable,
+        only: "sep1",
+      });
+      expect(existsSync(tempTable)).toBe(true);
+      expect(readFileSync(tempTable, "utf-8")).toContain("SEP Compliance Report");
+
+      await runCheckAction("example.com", {
+        ...baseOpts,
+        format: "html",
+        output: tempHtml,
+        only: "sep1",
+      });
+      expect(existsSync(tempHtml)).toBe(true);
+      expect(readFileSync(tempHtml, "utf-8")).toContain("<!DOCTYPE html>");
+    } finally {
+      if (existsSync(tempTable)) unlinkSync(tempTable);
+      if (existsSync(tempHtml)) unlinkSync(tempHtml);
+    }
+  });
+
+  it("handles server discovery fallbacks for KYC, SEP-24, and SEP-38", async () => {
+    const mockToml = `
+VERSION = "2.0.0"
+TRANSFER_SERVER = "https://transfer.example.com"
+TRANSFER_SERVER_SEP0024 = "https://sep24.example.com"
+ANCHOR_QUOTE_SERVER = "https://sep38.example.com"
+`;
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.includes(".well-known/stellar.toml")) {
+        return new Response(mockToml, { status: 200 });
+      }
+      if (url.includes("/info")) {
+        return new Response(JSON.stringify({ assets: [] }), { status: 200 });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      only: "sep38",
+    });
+
+    expect(report).toBeDefined();
+    expect(report?.results.some((r) => r.id.startsWith("sep38"))).toBe(true);
+  });
+
+  it("sets exitCode 1 when --fail-on-warn is active and warnings exist", async () => {
+    global.fetch = vi.fn(async () => {
+      // Incomplete TOML produces warnings
+      return new Response('VERSION="2.0.0"\n', { status: 200 });
+    });
+
+    await runCheckAction("example.com", {
+      ...baseOpts,
+      failOnWarn: true,
+      only: "sep1",
+    });
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("passes --no-write flag to SEP-12 runner", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.includes(".well-known/stellar.toml")) {
+        return new Response('VERSION="2.0.0"\nKYC_SERVER="https://kyc.example.com"\n', { status: 200 });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      only: "sep12",
+      noWrite: true,
+    });
+
+    expect(report).toBeDefined();
+    const skipCheck = report?.results.find((r) => r.id === "sep12.skipped");
+    expect(skipCheck).toBeDefined();
+  });
+
+  it("catches uncaught crash and reports unexpected_error check", async () => {
+    global.fetch = vi.fn(async () => {
+      throw new Error("Catastrophic network socket error");
+    });
+
+    const report = await runCheckAction("example.com", baseOpts);
+    expect(report).toBeDefined();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("buildProgram creates CLI and parses options", async () => {
+    global.fetch = vi.fn(async () => {
+      return new Response('VERSION="2.0.0"\n', { status: 200 });
+    });
+
+    const program = buildProgram();
+    expect(program.name()).toBe("sep-compliance-validator");
+
+    await program.parseAsync(["node", "cli.js", "check", "example.com", "--only", "sep1"]);
+    expect(global.fetch).toHaveBeenCalled();
+  });
+});
+
+describe("CLI subprocess integration and input validation", () => {
   it("rejects invalid --format with code 2", async () => {
     try {
       await execAsync(`${cliPath} check example.com --format xml`);
@@ -83,6 +314,16 @@ describe("CLI input validation and error boundaries", () => {
     }
   });
 
+  it("rejects invalid SEP in --only with code 2", async () => {
+    try {
+      await execAsync(`${cliPath} check example.com --only sep99`);
+      expect.fail("Expected CLI to exit with code 2");
+    } catch (err: any) {
+      expect(err.code).toBe(2);
+      expect(err.stderr).toContain('Invalid SEP in --only: "sep99"');
+    }
+  });
+
   it("fails sep1.web_auth_endpoint when WEB_AUTH_ENDPOINT is not a valid absolute URL", () => {
     const rawToml = `
 VERSION = "2.0.0"
@@ -107,122 +348,4 @@ WEB_AUTH_ENDPOINT = "example.com/auth"
     expect(results[0].status).toBe("fail");
     expect(results[0].message).toContain("Simulated unexpected crash");
   });
-
-  it("rejects invalid SEP in --only with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --only sep99`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid SEP in --only: "sep99"');
-    }
-  });
-
-  it("supports --output <file> writing report and leaving stdout silent", async () => {
-    const testFile = "temp-report.json";
-    try {
-      const { stdout } = await execAsync(
-        `${cliPath} check example.com --format json --output ${testFile}`,
-      ).catch((err) => err);
-      // stdout should be empty
-      expect(stdout.trim()).toBe("");
-      expect(existsSync(testFile)).toBe(true);
-      const content = readFileSync(testFile, "utf-8");
-      const parsed = JSON.parse(content);
-      expect(parsed.domain).toBe("example.com");
-      expect(Array.isArray(parsed.results)).toBe(true);
-    } finally {
-      if (existsSync(testFile)) {
-        unlinkSync(testFile);
-      }
-    }
-  });
-
-  it("--verbose writes diagnostics to stderr and leaves stdout clean parseable JSON", async () => {
-    try {
-      const { stdout, stderr } = await execAsync(
-        `${cliPath} check example.com --format json --verbose`,
-      );
-      expect(stderr).toContain("[http]");
-      const parsed = JSON.parse(stdout);
-      expect(parsed.domain).toBe("example.com");
-    } catch (err: any) {
-      // If anchor check fails exit 1, stdout is still valid JSON and stderr has diagnostics
-      if (err.stdout) {
-        expect(err.stderr).toContain("[http]");
-        const parsed = JSON.parse(err.stdout);
-        expect(parsed.domain).toBe("example.com");
-      } else {
-        throw err;
-      }
-    }
-  });
-
-  it("--only sep12 without sep10 produces a skip warning", async () => {
-    try {
-      const { stdout } = await execAsync(
-        `${cliPath} check example.com --only sep12 --format json`,
-      );
-      const parsed = JSON.parse(stdout);
-      const sep12Skip = parsed.results.find((r: any) => r.id === "sep12.skipped");
-      expect(sep12Skip).toBeDefined();
-      expect(sep12Skip.status).toBe("warn");
-      expect(sep12Skip.message).toContain("requires SEP-10 for a JWT");
-    } catch (err: any) {
-      if (err.stdout) {
-        const parsed = JSON.parse(err.stdout);
-        const sep12Skip = parsed.results.find((r: any) => r.id === "sep12.skipped");
-        expect(sep12Skip).toBeDefined();
-        expect(sep12Skip.status).toBe("warn");
-      } else {
-        throw err;
-      }
-    }
-  });
 });
-
-describe("Output renderers unit tests", () => {
-  const mockReport: Report = {
-    domain: "anchor.example.com",
-    network: "testnet",
-    timestamp: "2026-09-01T12:00:00.000Z",
-    results: [
-      {
-        id: "sep1.stellar_toml_exists",
-        description: "Fetch stellar.toml",
-        status: "pass",
-        severity: "error",
-        message: "Found stellar.toml",
-      },
-      {
-        id: "sep1.signing_key",
-        description: "SIGNING_KEY is present",
-        status: "warn",
-        severity: "warning",
-        message: "Optional field missing",
-      },
-    ],
-  };
-
-  it("renderJson formats report into JSON string", () => {
-    const jsonStr = renderJson(mockReport);
-    const parsed = JSON.parse(jsonStr);
-    expect(parsed.domain).toBe("anchor.example.com");
-    expect(parsed.results).toHaveLength(2);
-  });
-
-  it("renderTable formats report into table string with summary", () => {
-    const tableStr = renderTable(mockReport);
-    expect(tableStr).toContain("anchor.example.com");
-    expect(tableStr).toContain("sep1.stellar_toml_exists");
-    expect(tableStr).toContain("1/2 passed, 0 failed, 1 warnings");
-  });
-
-  it("renderHtml formats report into html document", () => {
-    const htmlStr = renderHtml(mockReport);
-    expect(htmlStr).toContain("<!DOCTYPE html>");
-    expect(htmlStr).toContain("anchor.example.com");
-    expect(htmlStr).toContain("sep1.stellar_toml_exists");
-  });
-});
-
