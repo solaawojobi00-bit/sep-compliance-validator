@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { Keypair, Networks, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { createLocalJWKSet, jwtVerify } from "jose";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
 import type { StellarToml } from "./sep1.js";
@@ -13,11 +14,21 @@ export interface Sep10Options {
   clientDomain?: string;
   clientSigningKey?: string;
   clientDomainKeypair?: Keypair;
+  jwksUri?: string;
   onJwt?: (jwt: string) => void;
 }
 
 export interface Sep10Result extends Array<CheckResult> {
   jwt?: string;
+}
+
+function decodeJwtHeader(jwt: string): Record<string, unknown> {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) {
+    throw new Error(`JWT does not have 3 parts (got ${parts.length})`);
+  }
+  const headerJson = Buffer.from(parts[0], "base64url").toString("utf-8");
+  return JSON.parse(headerJson) as Record<string, unknown>;
 }
 
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
@@ -335,8 +346,31 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     return results;
   }
 
-  // 5. Sanity-check the JWT payload.
+  // 5. Sanity-check the JWT header and payload.
+  let isAlgNone = false;
   try {
+    const header = decodeJwtHeader(jwt);
+    const alg = typeof header.alg === "string" ? header.alg : undefined;
+
+    if (!alg || alg.toLowerCase() === "none") {
+      isAlgNone = true;
+      results.push({
+        id: "sep10.jwt_algorithm",
+        description: 'JWT "alg" header indicates a signed token (not "none")',
+        status: "fail",
+        severity: "error",
+        message: `JWT algorithm is "${alg ?? "missing"}", unsigned tokens are rejected`,
+      });
+    } else {
+      results.push({
+        id: "sep10.jwt_algorithm",
+        description: 'JWT "alg" header indicates a signed token (not "none")',
+        status: "pass",
+        severity: "error",
+        message: `JWT algorithm is "${alg}"`,
+      });
+    }
+
     const payload = decodeJwtPayload(jwt);
     const sub = typeof payload.sub === "string" ? payload.sub : undefined;
     const exp = typeof payload.exp === "number" ? payload.exp : undefined;
@@ -411,6 +445,91 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       severity: "error",
       message: (err as Error).message,
     });
+  }
+
+  // 6. Cryptographic signature verification via anchor JWKS (if discoverable).
+  if (isAlgNone) {
+    results.push({
+      id: "sep10.jwt_signature",
+      description: "Verify JWT cryptographic signature via anchor JWKS",
+      status: "fail",
+      severity: "error",
+      message: 'JWT signature verification failed: token uses "none" algorithm',
+    });
+  } else {
+    const jwksEndpoint =
+      opts.jwksUri ??
+      toml.jwksUri ??
+      (typeof toml.raw.JWKS_URI === "string"
+        ? toml.raw.JWKS_URI
+        : typeof toml.raw.JWKS_ENDPOINT === "string"
+          ? toml.raw.JWKS_ENDPOINT
+          : typeof toml.raw.JWKS === "string"
+            ? toml.raw.JWKS
+            : undefined);
+
+    let resolvedJwksUri = jwksEndpoint;
+    if (!resolvedJwksUri) {
+      const probeUrl = `https://${webAuthDomain}/.well-known/jwks.json`;
+      try {
+        const probeRes = await fetchWithTimeout(probeUrl);
+        if (probeRes.ok) {
+          const probeData = (await probeRes.json().catch(() => null)) as {
+            keys?: unknown[];
+          } | null;
+          if (Array.isArray(probeData?.keys) && probeData.keys.length > 0) {
+            resolvedJwksUri = probeUrl;
+          }
+        }
+      } catch {
+        // Probe failed, no discoverable JWKS
+      }
+    }
+
+    if (!resolvedJwksUri) {
+      results.push({
+        id: "sep10.jwt_signature",
+        description: "Verify JWT cryptographic signature via anchor JWKS",
+        status: "warn",
+        severity: "warning",
+        message:
+          "Skipped: no JWKS endpoint declared in stellar.toml or discovered at /.well-known/jwks.json",
+      });
+    } else {
+      try {
+        const jwksRes = await fetchWithTimeout(resolvedJwksUri);
+        if (!jwksRes.ok) {
+          results.push({
+            id: "sep10.jwt_signature",
+            description: "Verify JWT cryptographic signature via anchor JWKS",
+            status: "fail",
+            severity: "error",
+            message: `JWKS endpoint ${resolvedJwksUri} returned HTTP ${jwksRes.status}`,
+          });
+        } else {
+          const jwksData = (await jwksRes.json()) as Parameters<
+            typeof createLocalJWKSet
+          >[0];
+          const localJWKS = createLocalJWKSet(jwksData);
+          await jwtVerify(jwt, localJWKS);
+          results.push({
+            id: "sep10.jwt_signature",
+            description: "Verify JWT cryptographic signature via anchor JWKS",
+            status: "pass",
+            severity: "error",
+            message: `JWT signature verified successfully via ${resolvedJwksUri}`,
+          });
+        }
+      } catch (err) {
+        results.push({
+          id: "sep10.jwt_signature",
+          description: "Verify JWT cryptographic signature via anchor JWKS",
+          status: "fail",
+          severity: "error",
+          message: `JWT signature verification failed: ${(err as Error).message}`,
+        });
+      }
+    }
   }
 
   return results;

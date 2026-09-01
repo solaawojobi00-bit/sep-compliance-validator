@@ -11,6 +11,7 @@ export interface StellarToml {
   kycServer?: string;
   transferServer?: string;
   transferServerSep24?: string;
+  jwksUri?: string;
 }
 
 export async function fetchStellarToml(
@@ -150,6 +151,15 @@ export async function fetchStellarToml(
       ? raw.TRANSFER_SERVER_SEP0024
       : undefined;
 
+  const jwksUri =
+    typeof raw.JWKS_URI === "string"
+      ? raw.JWKS_URI
+      : typeof raw.JWKS_ENDPOINT === "string"
+        ? raw.JWKS_ENDPOINT
+        : typeof raw.JWKS === "string"
+          ? raw.JWKS
+          : undefined;
+
   return {
     toml: {
       raw,
@@ -160,6 +170,7 @@ export async function fetchStellarToml(
       kycServer,
       transferServer,
       transferServerSep24,
+      jwksUri,
     },
     results,
   };
