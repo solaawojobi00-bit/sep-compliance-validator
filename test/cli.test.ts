@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { exec } from "node:child_process";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
 import { parseStellarToml } from "../src/checks/sep1.js";
 import { guardChecker } from "../src/core/guard.js";
+import type { Report } from "../src/core/report.js";
+import { renderHtml } from "../src/output/html.js";
+import { renderJson } from "../src/output/json.js";
+import { renderTable } from "../src/output/table.js";
 
 const execAsync = promisify(exec);
 const cliPath = "node dist/cli.js";
@@ -102,4 +107,122 @@ WEB_AUTH_ENDPOINT = "example.com/auth"
     expect(results[0].status).toBe("fail");
     expect(results[0].message).toContain("Simulated unexpected crash");
   });
+
+  it("rejects invalid SEP in --only with code 2", async () => {
+    try {
+      await execAsync(`${cliPath} check example.com --only sep99`);
+      expect.fail("Expected CLI to exit with code 2");
+    } catch (err: any) {
+      expect(err.code).toBe(2);
+      expect(err.stderr).toContain('Invalid SEP in --only: "sep99"');
+    }
+  });
+
+  it("supports --output <file> writing report and leaving stdout silent", async () => {
+    const testFile = "temp-report.json";
+    try {
+      const { stdout } = await execAsync(
+        `${cliPath} check example.com --format json --output ${testFile}`,
+      ).catch((err) => err);
+      // stdout should be empty
+      expect(stdout.trim()).toBe("");
+      expect(existsSync(testFile)).toBe(true);
+      const content = readFileSync(testFile, "utf-8");
+      const parsed = JSON.parse(content);
+      expect(parsed.domain).toBe("example.com");
+      expect(Array.isArray(parsed.results)).toBe(true);
+    } finally {
+      if (existsSync(testFile)) {
+        unlinkSync(testFile);
+      }
+    }
+  });
+
+  it("--verbose writes diagnostics to stderr and leaves stdout clean parseable JSON", async () => {
+    try {
+      const { stdout, stderr } = await execAsync(
+        `${cliPath} check example.com --format json --verbose`,
+      );
+      expect(stderr).toContain("[http]");
+      const parsed = JSON.parse(stdout);
+      expect(parsed.domain).toBe("example.com");
+    } catch (err: any) {
+      // If anchor check fails exit 1, stdout is still valid JSON and stderr has diagnostics
+      if (err.stdout) {
+        expect(err.stderr).toContain("[http]");
+        const parsed = JSON.parse(err.stdout);
+        expect(parsed.domain).toBe("example.com");
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  it("--only sep12 without sep10 produces a skip warning", async () => {
+    try {
+      const { stdout } = await execAsync(
+        `${cliPath} check example.com --only sep12 --format json`,
+      );
+      const parsed = JSON.parse(stdout);
+      const sep12Skip = parsed.results.find((r: any) => r.id === "sep12.skipped");
+      expect(sep12Skip).toBeDefined();
+      expect(sep12Skip.status).toBe("warn");
+      expect(sep12Skip.message).toContain("requires SEP-10 for a JWT");
+    } catch (err: any) {
+      if (err.stdout) {
+        const parsed = JSON.parse(err.stdout);
+        const sep12Skip = parsed.results.find((r: any) => r.id === "sep12.skipped");
+        expect(sep12Skip).toBeDefined();
+        expect(sep12Skip.status).toBe("warn");
+      } else {
+        throw err;
+      }
+    }
+  });
 });
+
+describe("Output renderers unit tests", () => {
+  const mockReport: Report = {
+    domain: "anchor.example.com",
+    network: "testnet",
+    timestamp: "2026-09-01T12:00:00.000Z",
+    results: [
+      {
+        id: "sep1.stellar_toml_exists",
+        description: "Fetch stellar.toml",
+        status: "pass",
+        severity: "error",
+        message: "Found stellar.toml",
+      },
+      {
+        id: "sep1.signing_key",
+        description: "SIGNING_KEY is present",
+        status: "warn",
+        severity: "warning",
+        message: "Optional field missing",
+      },
+    ],
+  };
+
+  it("renderJson formats report into JSON string", () => {
+    const jsonStr = renderJson(mockReport);
+    const parsed = JSON.parse(jsonStr);
+    expect(parsed.domain).toBe("anchor.example.com");
+    expect(parsed.results).toHaveLength(2);
+  });
+
+  it("renderTable formats report into table string with summary", () => {
+    const tableStr = renderTable(mockReport);
+    expect(tableStr).toContain("anchor.example.com");
+    expect(tableStr).toContain("sep1.stellar_toml_exists");
+    expect(tableStr).toContain("1/2 passed, 0 failed, 1 warnings");
+  });
+
+  it("renderHtml formats report into html document", () => {
+    const htmlStr = renderHtml(mockReport);
+    expect(htmlStr).toContain("<!DOCTYPE html>");
+    expect(htmlStr).toContain("anchor.example.com");
+    expect(htmlStr).toContain("sep1.stellar_toml_exists");
+  });
+});
+

@@ -8,8 +8,9 @@ const STATUS_ICON: Record<string, string> = {
   warn: "WARN",
 };
 
-export function printTable(report: Report): void {
-  console.log(`\nSEP Compliance Report for ${report.domain} (${report.network})\n`);
+export function renderTable(report: Report): string {
+  const parts: string[] = [];
+  parts.push(`\nSEP Compliance Report for ${report.domain} (${report.network})\n`);
 
   const table = new Table({
     head: ["Status", "Check", "Message"],
@@ -20,8 +21,13 @@ export function printTable(report: Report): void {
   for (const r of report.results) {
     table.push([STATUS_ICON[r.status] ?? r.status, `${r.id}\n${r.description}`, r.message]);
   }
-  console.log(table.toString());
+  parts.push(table.toString());
 
   const { pass, fail, warn, total } = summarize(report);
-  console.log(`\n${pass}/${total} passed, ${fail} failed, ${warn} warnings\n`);
+  parts.push(`\n${pass}/${total} passed, ${fail} failed, ${warn} warnings\n`);
+  return parts.join("\n");
+}
+
+export function printTable(report: Report): void {
+  console.log(renderTable(report));
 }
