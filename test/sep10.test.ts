@@ -747,4 +747,28 @@ describe("runSep10Checks", () => {
     expect(results[0].message).toContain("does not match target network passphrase");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("skips SEP-10 checks when toml.signingKey is malformed", async () => {
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy;
+
+    const malformedToml: StellarToml = {
+      raw: {},
+      webAuthEndpoint: `https://${domain}/auth`,
+      signingKey: "GNOTVALIDED25519KEY",
+      networkPassphrase: Networks.TESTNET,
+    };
+
+    const results = await runSep10Checks({
+      domain,
+      toml: malformedToml,
+      network: "testnet",
+    });
+
+    expect(results.length).toBe(1);
+    expect(results[0].id).toBe("sep10.skipped");
+    expect(results[0].status).toBe("warn");
+    expect(results[0].message).toContain('SIGNING_KEY "GNOTVALIDED25519KEY" is not a valid Stellar ed25519 public key');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

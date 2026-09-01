@@ -14,14 +14,14 @@ describe("fetchStellarToml", () => {
   it("passes all checks for a well-formed stellar.toml", async () => {
     const toml = `
 WEB_AUTH_ENDPOINT="https://example.com/auth"
-SIGNING_KEY="GABCXYZ"
+SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
 NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 `;
     mockFetch({ ok: true, text: async () => toml } as Response);
 
     const { results, toml: parsed } = await fetchStellarToml("example.com");
     expect(parsed.webAuthEndpoint).toBe("https://example.com/auth");
-    expect(parsed.signingKey).toBe("GABCXYZ");
+    expect(parsed.signingKey).toBe("GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7");
     expect(results.every((r) => r.status === "pass")).toBe(true);
   });
 
@@ -234,4 +234,81 @@ WEB_AUTH_ENDPOINT = "https://auth.example.com"
     expect(results.some((r) => r.id === "sep1.network_passphrase_value")).toBe(false);
   });
 });
+
+describe("SEP-1 SIGNING_KEY and ACCOUNTS validation", () => {
+  const validKey = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7";
+  const validKey2 = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+  const malformedKey = "GNOTVALIDED25519";
+
+  it("passes when SIGNING_KEY is a well-formed Stellar ed25519 public key", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const check = results.find((r) => r.id === "sep1.signing_key_format");
+    expect(check?.status).toBe("pass");
+    expect(check?.message).toContain(validKey);
+  });
+
+  it("fails when SIGNING_KEY is malformed", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${malformedKey}"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const check = results.find((r) => r.id === "sep1.signing_key_format");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain(malformedKey);
+    expect(check?.message).toContain("not a valid Stellar ed25519 public key");
+  });
+
+  it("skips signing_key_format check when SIGNING_KEY is absent", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+WEB_AUTH_ENDPOINT = "https://auth.example.com"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const presenceCheck = results.find((r) => r.id === "sep1.signing_key");
+    expect(presenceCheck?.status).toBe("fail");
+    expect(results.some((r) => r.id === "sep1.signing_key_format")).toBe(false);
+  });
+
+  it("validates ACCOUNTS when all entries are valid ed25519 keys", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+ACCOUNTS = ["${validKey}", "${validKey2}"]
+`;
+    const { toml, results } = parseStellarToml(rawToml);
+    expect(toml.accounts).toEqual([validKey, validKey2]);
+    const check = results.find((r) => r.id === "sep1.accounts");
+    expect(check?.status).toBe("pass");
+    expect(check?.message).toContain("All 2 ACCOUNTS are valid");
+  });
+
+  it("fails ACCOUNTS validation when entries contain invalid public keys", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+ACCOUNTS = ["${validKey}", "not-a-valid-key", 12345]
+`;
+    const { toml, results } = parseStellarToml(rawToml);
+    expect(toml.accounts).toEqual([validKey]);
+    const check = results.find((r) => r.id === "sep1.accounts");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain("index 1");
+    expect(check?.message).toContain("index 2");
+  });
+
+  it("remains silent when ACCOUNTS is absent", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+`;
+    const { results } = parseStellarToml(rawToml);
+    expect(results.some((r) => r.id === "sep1.accounts")).toBe(false);
+  });
+});
+
 
