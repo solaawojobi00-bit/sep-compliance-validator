@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { Keypair, MuxedAccount, Networks, StrKey, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Account, Keypair, MuxedAccount, Networks, StrKey, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -17,6 +17,8 @@ export interface Sep10Options {
   jwksUri?: string;
   timeoutMs?: number;
   onJwt?: (jwt: string) => void;
+  memo?: string;
+  useMuxedAccount?: boolean;
 }
 
 export { runSep10NegativeChecks, type Sep10NegativeOptions } from "./sep10-negative.js";
@@ -100,14 +102,20 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     return results;
   }
   const clientKeypair = Keypair.random();
+  const clientAccountId = opts.useMuxedAccount
+    ? new MuxedAccount(new Account(clientKeypair.publicKey(), "0"), "123456").accountId()
+    : clientKeypair.publicKey();
 
   // 1. Request a challenge transaction.
   let challengeXdr: string;
   let responseNetworkPassphrase: string | undefined;
   try {
     const url = new URL(webAuthEndpoint);
-    url.searchParams.set("account", clientKeypair.publicKey());
+    url.searchParams.set("account", clientAccountId);
     url.searchParams.set("home_domain", domain);
+    if (opts.memo) {
+      url.searchParams.set("memo", opts.memo);
+    }
     if (opts.clientDomain) {
       url.searchParams.set("client_domain", opts.clientDomain);
     }
@@ -234,10 +242,16 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
 
   // Verify challenge nonce uniqueness across distinct client accounts
   const secondClientKeypair = Keypair.random();
+  const secondClientAccountId = opts.useMuxedAccount
+    ? new MuxedAccount(new Account(secondClientKeypair.publicKey(), "0"), "654321").accountId()
+    : secondClientKeypair.publicKey();
   try {
     const secondUrl = new URL(webAuthEndpoint);
-    secondUrl.searchParams.set("account", secondClientKeypair.publicKey());
+    secondUrl.searchParams.set("account", secondClientAccountId);
     secondUrl.searchParams.set("home_domain", domain);
+    if (opts.memo) {
+      secondUrl.searchParams.set("memo", opts.memo);
+    }
     if (opts.clientDomain) {
       secondUrl.searchParams.set("client_domain", opts.clientDomain);
     }
@@ -307,6 +321,78 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     });
   }
 
+  // Validate memo if requested, and run memo + muxed rejection negative check
+  if (opts.memo) {
+    const challengeMemo = rawChallengeTx?.memo;
+    if (
+      !challengeMemo ||
+      challengeMemo.type !== "id" ||
+      String(challengeMemo.value) !== opts.memo
+    ) {
+      results.push({
+        id: "sep10.challenge_memo",
+        description: 'Challenge transaction carries requested ID memo',
+        status: "fail",
+        severity: "error",
+        message: `Expected memo of type "id" with value "${opts.memo}", got type "${challengeMemo?.type ?? "none"}" with value "${challengeMemo?.value ?? "none"}"`,
+      });
+    } else {
+      results.push({
+        id: "sep10.challenge_memo",
+        description: 'Challenge transaction carries requested ID memo',
+        status: "pass",
+        severity: "error",
+        message: `Challenge carries valid ID memo: ${challengeMemo.value}`,
+      });
+    }
+
+    // Negative case: Server must reject memo combined with an M... muxed account
+    try {
+      const dummyKeypair = Keypair.random();
+      const dummyMuxed = new MuxedAccount(
+        new Account(dummyKeypair.publicKey(), "0"),
+        "999",
+      ).accountId();
+      const conflictUrl = new URL(webAuthEndpoint);
+      conflictUrl.searchParams.set("account", dummyMuxed);
+      conflictUrl.searchParams.set("memo", opts.memo);
+      conflictUrl.searchParams.set("home_domain", domain);
+      const conflictRes = await fetchWithTimeout(
+        conflictUrl.toString(),
+        {},
+        opts.timeoutMs,
+      );
+      if (conflictRes.status >= 400 && conflictRes.status < 500) {
+        results.push({
+          id: "sep10.memo_muxed_conflict_rejected",
+          description:
+            "Server rejects challenge request combining memo with muxed (M...) account",
+          status: "pass",
+          severity: "error",
+          message: `Server correctly rejected memo with muxed account (HTTP ${conflictRes.status})`,
+        });
+      } else {
+        results.push({
+          id: "sep10.memo_muxed_conflict_rejected",
+          description:
+            "Server rejects challenge request combining memo with muxed (M...) account",
+          status: "fail",
+          severity: "error",
+          message: `Server failed to reject memo with muxed account (HTTP ${conflictRes.status})`,
+        });
+      }
+    } catch (err) {
+      results.push({
+        id: "sep10.memo_muxed_conflict_rejected",
+        description:
+          "Server rejects challenge request combining memo with muxed (M...) account",
+        status: "warn",
+        severity: "warning",
+        message: `Could not verify memo/muxed conflict rejection: ${(err as Error).message}`,
+      });
+    }
+  }
+
   // 4. Validate the challenge transaction's structure via the SDK (sequence
   // number zero, correct source account, Manage Data operations, timebounds,
   // home domain, and that it's signed by the anchor's SIGNING_KEY).
@@ -342,7 +428,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
   }
 
   results.push(
-    parsedClientAccountId === clientKeypair.publicKey()
+    parsedClientAccountId === clientAccountId
       ? {
           id: "sep10.challenge_client_account",
           description: "Challenge transaction source account matches requested client account",
@@ -355,7 +441,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
           description: "Challenge transaction source account matches requested client account",
           status: "fail",
           severity: "error",
-          message: `Expected ${clientKeypair.publicKey()}, got ${parsedClientAccountId}`,
+          message: `Expected ${clientAccountId}, got ${parsedClientAccountId}`,
         },
   );
 
@@ -613,33 +699,50 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     let subValid = false;
     let subMessage = "";
 
-    if (!sub) {
-      subMessage = `Expected sub to be ${parsedClientAccountId}, got ${sub ?? "missing"}`;
-    } else if (sub === parsedClientAccountId) {
-      subValid = true;
-      subMessage = `sub = ${sub}`;
-    } else if (sub.startsWith(`${parsedClientAccountId}:`)) {
-      const memo = sub.slice(parsedClientAccountId.length + 1);
-      if (/^\d+$/.test(memo)) {
+    if (opts.memo) {
+      const expectedSub = `${clientKeypair.publicKey()}:${opts.memo}`;
+      if (sub === expectedSub) {
         subValid = true;
         subMessage = `sub = ${sub}`;
       } else {
-        subMessage = `Invalid sub "${sub}": memo suffix must be digits, expected ${parsedClientAccountId}:<digits>`;
+        subMessage = `Expected sub to be exactly "${expectedSub}", got "${sub}"`;
       }
-    } else if (StrKey.isValidMed25519PublicKey(sub)) {
-      try {
-        const base = MuxedAccount.fromAddress(sub, "0").baseAccount().accountId();
-        if (base === parsedClientAccountId) {
-          subValid = true;
-          subMessage = `sub = ${sub} (muxed account for ${parsedClientAccountId})`;
-        } else {
-          subMessage = `Invalid muxed sub "${sub}": base account ${base} does not match ${parsedClientAccountId}`;
-        }
-      } catch {
-        subMessage = `Invalid muxed sub "${sub}"`;
+    } else if (opts.useMuxedAccount) {
+      if (sub === clientAccountId) {
+        subValid = true;
+        subMessage = `sub = ${sub} (muxed account unchanged)`;
+      } else {
+        subMessage = `Expected sub to return muxed account unchanged "${clientAccountId}", got "${sub}"`;
       }
     } else {
-      subMessage = `Invalid sub "${sub}": expected exact ${parsedClientAccountId}, ${parsedClientAccountId}:<digits>, or valid M... muxed account`;
+      if (!sub) {
+        subMessage = `Expected sub to be ${parsedClientAccountId}, got ${sub ?? "missing"}`;
+      } else if (sub === parsedClientAccountId) {
+        subValid = true;
+        subMessage = `sub = ${sub}`;
+      } else if (sub.startsWith(`${parsedClientAccountId}:`)) {
+        const memo = sub.slice(parsedClientAccountId.length + 1);
+        if (/^\d+$/.test(memo)) {
+          subValid = true;
+          subMessage = `sub = ${sub}`;
+        } else {
+          subMessage = `Invalid sub "${sub}": memo suffix must be digits, expected ${parsedClientAccountId}:<digits>`;
+        }
+      } else if (StrKey.isValidMed25519PublicKey(sub)) {
+        try {
+          const base = MuxedAccount.fromAddress(sub, "0").baseAccount().accountId();
+          if (base === parsedClientAccountId) {
+            subValid = true;
+            subMessage = `sub = ${sub} (muxed account for ${parsedClientAccountId})`;
+          } else {
+            subMessage = `Invalid muxed sub "${sub}": base account ${base} does not match ${parsedClientAccountId}`;
+          }
+        } catch {
+          subMessage = `Invalid muxed sub "${sub}"`;
+        }
+      } else {
+        subMessage = `Invalid sub "${sub}": expected exact ${parsedClientAccountId}, ${parsedClientAccountId}:<digits>, or valid M... muxed account`;
+      }
     }
 
     results.push({
