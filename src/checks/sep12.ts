@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
 import type { StellarToml } from "./sep1.js";
@@ -8,6 +9,7 @@ export interface Sep12Options {
   network: "testnet" | "mainnet";
   jwt: string;
   timeoutMs?: number;
+  noWrite?: boolean;
 }
 
 const VALID_SEP12_STATUSES = ["ACCEPTED", "PROCESSING", "NEEDS_INFO", "REJECTED"] as const;
@@ -51,7 +53,52 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
     Authorization: `Bearer ${opts.jwt}`,
   };
 
+  // If --no-write is enabled, skip mutating operations
+  if (opts.noWrite) {
+    results.push({
+      id: "sep12.put_customer",
+      description: "PUT /customer accepts minimal valid KYC field set",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: --no-write mode enabled; mutating PUT /customer request omitted",
+    });
+    results.push({
+      id: "sep12.get_customer",
+      description: "GET /customer returns existing customer record",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: --no-write mode enabled; no customer record created to fetch by id",
+    });
+    results.push({
+      id: "sep12.put_malformed_field",
+      description: "PUT /customer rejects malformed fields with error response",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: --no-write mode enabled; mutating PUT /customer request omitted",
+    });
+    return results;
+  }
+
+  const runId = randomUUID().slice(0, 8);
+  const syntheticFirstName = "SEPVALIDATOR";
+  const syntheticLastName = `Run-${runId}`;
+  const syntheticEmail = `sepvalidator-${runId}@invalid.test`;
+
+  const createdCustomerIds = new Set<string>();
   let customerId: string | undefined;
+
+  let account: string | undefined;
+  try {
+    const parts = opts.jwt.split(".");
+    if (parts.length >= 2) {
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+      if (typeof payload.sub === "string") {
+        account = payload.sub.split(":")[0];
+      }
+    }
+  } catch {
+    // ignore non-base64 or mock tokens
+  }
 
   // 1. PUT /customer with minimal valid field set
   try {
@@ -62,9 +109,9 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        first_name: "Jane",
-        last_name: "Doe",
-        email_address: "jane.doe@example.com",
+        first_name: syntheticFirstName,
+        last_name: syntheticLastName,
+        email_address: syntheticEmail,
       }),
     }, opts.timeoutMs);
 
@@ -93,6 +140,9 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         });
       } else {
         customerId = body.id;
+        if (body.id) {
+          createdCustomerIds.add(body.id);
+        }
         results.push({
           id: "sep12.put_customer",
           description: "PUT /customer accepts minimal valid KYC field set",
@@ -183,11 +233,20 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        first_name: "Jane",
-        last_name: "Doe",
+        first_name: syntheticFirstName,
+        last_name: syntheticLastName,
         email_address: "not-an-email-address",
       }),
     }, opts.timeoutMs);
+
+    try {
+      const invalidBody = (await invalidPutRes.json()) as { id?: string; status?: string; error?: string };
+      if (typeof invalidBody.id === "string" && invalidBody.id.trim().length > 0) {
+        createdCustomerIds.add(invalidBody.id);
+      }
+    } catch {
+      // ignore parse error if body is non-json
+    }
 
     if (invalidPutRes.status === 400 || (invalidPutRes.status >= 400 && invalidPutRes.status < 500)) {
       results.push({
@@ -231,6 +290,48 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       severity: "error",
       message: (err as Error).message,
     });
+  }
+
+  // 4. Teardown: DELETE /customer/{account}
+  if (createdCustomerIds.size > 0) {
+    const targetIdentifier = account ?? customerId;
+    if (targetIdentifier) {
+      const deleteUrl = `${baseUrl}/customer/${encodeURIComponent(targetIdentifier)}`;
+      try {
+        const deleteRes = await fetchWithTimeout(deleteUrl, {
+          method: "DELETE",
+          headers: {
+            ...authHeader,
+          },
+        }, opts.timeoutMs);
+
+        if (deleteRes.ok || deleteRes.status === 200 || deleteRes.status === 204) {
+          results.push({
+            id: "sep12.delete_customer",
+            description: "DELETE /customer/{account} cleans up test customer data",
+            status: "pass",
+            severity: "warning",
+            message: `DELETE ${deleteUrl} returned HTTP ${deleteRes.status}; test customer data successfully cleaned up`,
+          });
+        } else {
+          results.push({
+            id: "sep12.delete_customer",
+            description: "DELETE /customer/{account} cleans up test customer data",
+            status: "warn",
+            severity: "warning",
+            message: `Teardown DELETE ${deleteUrl} failed with HTTP ${deleteRes.status}; created customer id(s) [${[...createdCustomerIds].join(", ")}] may have leaked`,
+          });
+        }
+      } catch (err) {
+        results.push({
+          id: "sep12.delete_customer",
+          description: "DELETE /customer/{account} cleans up test customer data",
+          status: "warn",
+          severity: "warning",
+          message: `Teardown DELETE ${deleteUrl} error (${(err as Error).message}); created customer id(s) [${[...createdCustomerIds].join(", ")}] may have leaked`,
+        });
+      }
+    }
   }
 
   return results;

@@ -57,6 +57,13 @@ describe("runSep12Checks", () => {
         } as Response;
       }
 
+      if (init?.method === "DELETE") {
+        return {
+          ok: true,
+          status: 200,
+        } as Response;
+      }
+
       throw new Error(`Unexpected request to ${url}`);
     }) as unknown as typeof fetch;
 
@@ -67,8 +74,10 @@ describe("runSep12Checks", () => {
       jwt,
     });
 
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(4);
     expect(results.every((r) => r.status === "pass")).toBe(true);
+    const deleteCheck = results.find((r) => r.id === "sep12.delete_customer");
+    expect(deleteCheck?.status).toBe("pass");
   });
 
   it("falls back to TRANSFER_SERVER when KYC_SERVER is not declared", async () => {
@@ -81,6 +90,9 @@ describe("runSep12Checks", () => {
 
     global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString();
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 200 } as Response;
+      }
       if (url.startsWith("https://transfer.example.com/customer")) {
         if (init?.method === "PUT") {
           const body = JSON.parse((init.body as string) || "{}");
@@ -190,6 +202,9 @@ describe("runSep12Checks", () => {
           json: async () => ({ id: "cust_123", status: "ACCEPTED" }),
         } as Response;
       }
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 200 } as Response;
+      }
       throw new Error(`Unexpected url: ${url}`);
     }) as unknown as typeof fetch;
 
@@ -207,6 +222,9 @@ describe("runSep12Checks", () => {
   it("fails when GET /customer returns a mismatched customer id", async () => {
     global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString();
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 200 } as Response;
+      }
       if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
         const body = JSON.parse(init?.body as string);
         if (body.email_address === "not-an-email-address") {
@@ -263,6 +281,100 @@ describe("runSep12Checks", () => {
     const putCheck = results.find((r) => r.id === "sep12.put_customer");
     expect(putCheck?.status).toBe("fail");
     expect(putCheck?.message).toContain("timed out after 25ms");
+  });
+
+  it("degrades teardown failure to warn without masking previous check results", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address === "not-an-email-address") {
+          return { ok: false, status: 400 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "leaked_cust_999", status: "ACCEPTED" }),
+        } as Response;
+      }
+      if (url.includes("/customer?id=leaked_cust_999")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "leaked_cust_999", status: "ACCEPTED" }),
+        } as Response;
+      }
+      if (init?.method === "DELETE") {
+        return {
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+        } as Response;
+      }
+      throw new Error(`Unexpected url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const putCheck = results.find((r) => r.id === "sep12.put_customer");
+    expect(putCheck?.status).toBe("pass");
+
+    const deleteCheck = results.find((r) => r.id === "sep12.delete_customer");
+    expect(deleteCheck?.status).toBe("warn");
+    expect(deleteCheck?.message).toContain("leaked_cust_999");
+  });
+
+  it("--no-write skips all mutating operations with warn and does not call fetch", async () => {
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+      noWrite: true,
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(results).toHaveLength(3);
+    expect(results.every((r) => r.status === "warn")).toBe(true);
+    expect(results[0].message).toContain("--no-write mode enabled");
+  });
+
+  it("uses randomized synthetic identities with @invalid.test emails", async () => {
+    let capturedBody: any;
+    global.fetch = vi.fn(async (_input, init) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address !== "not-an-email-address") {
+          capturedBody = body;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "c1", status: "ACCEPTED" }),
+        } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ id: "c1", status: "ACCEPTED" }) } as Response;
+    }) as unknown as typeof fetch;
+
+    await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    expect(capturedBody).toBeDefined();
+    expect(capturedBody.first_name).toBe("SEPVALIDATOR");
+    expect(capturedBody.last_name).toMatch(/^Run-[a-f0-9]{8}$/);
+    expect(capturedBody.email_address).toMatch(/^sepvalidator-[a-f0-9]{8}@invalid\.test$/);
   });
 });
 

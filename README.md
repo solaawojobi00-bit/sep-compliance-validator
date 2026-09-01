@@ -52,6 +52,7 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 - `--interactive-browser`: Run headless browser automation (Playwright) against SEP-24 interactive URL to validate forms and completion callbacks. Requires Playwright (`npm install playwright && npx playwright install chromium`).
 - `--memo <id>`: Numeric ID memo for SEP-10 challenge authentication to validate custodial wallet flows.
 - `--muxed`: Authenticate using a muxed (`M...`) account for SEP-10.
+- `--no-write`: Disable state-mutating requests (such as SEP-12 `PUT /customer`). By default, SEP-12 validation performs mutating writes with randomized synthetic identities (`@invalid.test`) and cleans them up via `DELETE /customer/{account}` upon completion. Passing `--no-write` restricts checks to read-only probing and skips mutating operations with a warning.
 
 ### Exit Codes
 
