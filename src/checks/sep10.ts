@@ -4,6 +4,8 @@ import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
 import type { StellarToml } from "./sep1.js";
 
+export const MAX_CHALLENGE_TIMEOUT_SECONDS = 900; // 15 minutes
+
 export interface Sep10Options {
   domain: string;
   toml: StellarToml;
@@ -174,6 +176,39 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
           message: `Expected ${clientKeypair.publicKey()}, got ${parsedClientAccountId}`,
         },
   );
+
+  const timeBounds = parsedChallengeTx?.timeBounds;
+  if (!timeBounds || !timeBounds.minTime || !timeBounds.maxTime) {
+    results.push({
+      id: "sep10.challenge_timebounds_reasonable",
+      description: "Challenge transaction validity window is within recommended limit",
+      status: "fail",
+      severity: "error",
+      message: "Challenge transaction is missing timebounds",
+    });
+  } else {
+    const minTime = Number(timeBounds.minTime);
+    const maxTime = Number(timeBounds.maxTime);
+    const windowSeconds = maxTime - minTime;
+
+    if (maxTime === 0 || windowSeconds > MAX_CHALLENGE_TIMEOUT_SECONDS || windowSeconds <= 0) {
+      results.push({
+        id: "sep10.challenge_timebounds_reasonable",
+        description: "Challenge transaction validity window is within recommended limit",
+        status: "fail",
+        severity: "error",
+        message: `Challenge validity window of ${windowSeconds}s exceeds maximum recommended ${MAX_CHALLENGE_TIMEOUT_SECONDS}s (15 minutes)`,
+      });
+    } else {
+      results.push({
+        id: "sep10.challenge_timebounds_reasonable",
+        description: "Challenge transaction validity window is within recommended limit",
+        status: "pass",
+        severity: "error",
+        message: `Challenge validity window is ${windowSeconds}s (within ${MAX_CHALLENGE_TIMEOUT_SECONDS}s limit)`,
+      });
+    }
+  }
 
   if (opts.clientDomain) {
     const clientDomainOp = (
