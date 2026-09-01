@@ -21,6 +21,38 @@ inputs:
     description: "Request timeout in milliseconds"
     required: false
     default: "10000"
+  confirm-mainnet:
+    description: "Acknowledge running checks against production anchor on mainnet"
+    required: false
+    default: "false"
+  fail-on-warn:
+    description: "Treat warning checks as non-zero failures"
+    required: false
+    default: "false"
+  only:
+    description: "Comma-separated list of SEPs to validate (sep1, sep10, sep12, sep24, sep38)"
+    required: false
+  interactive-browser:
+    description: "Run headless browser automation against SEP-24 interactive URL"
+    required: false
+    default: "false"
+
+outputs:
+  pass:
+    description: "Number of passed checks"
+    value: ${{ steps.process-results.outputs.pass }}
+  fail:
+    description: "Number of failed checks"
+    value: ${{ steps.process-results.outputs.fail }}
+  warn:
+    description: "Number of warning checks"
+    value: ${{ steps.process-results.outputs.warn }}
+  total:
+    description: "Total number of checks executed"
+    value: ${{ steps.process-results.outputs.total }}
+  report-path:
+    description: "File path to the generated JSON compliance report"
+    value: ${{ steps.process-results.outputs.report-path }}
 
 runs:
   using: "composite"
@@ -29,6 +61,12 @@ runs:
       uses: actions/setup-node@v4
       with:
         node-version: 22.x
+
+    - name: Install Playwright Chromium binary
+      if: inputs.interactive-browser == 'true'
+      shell: bash
+      run: |
+        npx playwright install chromium
 
     - name: Build validator dist if missing
       shell: bash
@@ -39,10 +77,124 @@ runs:
         fi
 
     - name: Run SEP Compliance Validator
+      id: run-validator
       shell: bash
       run: |
-        ARGS=("check" "${{ inputs.domain }}" "--network" "${{ inputs.network }}" "--format" "${{ inputs.format }}" "--timeout" "${{ inputs.timeout }}")
+        REPORT_FILE="${RUNNER_TEMP}/sep-compliance-report.json"
+        ARGS=("check" "${{ inputs.domain }}" "--network" "${{ inputs.network }}" "--format" "json" "--output" "$REPORT_FILE" "--timeout" "${{ inputs.timeout }}")
         if [ -n "${{ inputs.client-domain }}" ]; then
           ARGS+=("--client-domain" "${{ inputs.client-domain }}")
         fi
+        if [ "${{ inputs.confirm-mainnet }}" = "true" ]; then
+          ARGS+=("--i-understand-this-touches-production")
+        fi
+        if [ "${{ inputs.fail-on-warn }}" = "true" ]; then
+          ARGS+=("--fail-on-warn")
+        fi
+        if [ -n "${{ inputs.only }}" ]; then
+          ARGS+=("--only" "${{ inputs.only }}")
+        fi
+        if [ "${{ inputs.interactive-browser }}" = "true" ]; then
+          ARGS+=("--interactive-browser")
+        fi
+
+        set +e
         node "${{ github.action_path }}/dist/cli.js" "${ARGS[@]}"
+        CLI_EXIT=$?
+        echo "CLI_EXIT=$CLI_EXIT" >> "$GITHUB_ENV"
+        exit 0
+
+    - name: Process Results and Generate Job Summary
+      id: process-results
+      shell: bash
+      run: |
+        REPORT_FILE="${RUNNER_TEMP}/sep-compliance-report.json"
+        echo "report-path=$REPORT_FILE" >> "$GITHUB_OUTPUT"
+
+        node -e '
+          const fs = require("fs");
+          const reportFile = process.env.RUNNER_TEMP + "/sep-compliance-report.json";
+          if (!fs.existsSync(reportFile)) {
+            console.error("Report file not found:", reportFile);
+            process.exit(1);
+          }
+          const report = JSON.parse(fs.readFileSync(reportFile, "utf-8"));
+          const results = report.results || [];
+          let pass = 0, fail = 0, warn = 0;
+          for (const r of results) {
+            if (r.status === "pass") pass++;
+            else if (r.status === "fail") fail++;
+            else if (r.status === "warn") warn++;
+          }
+          const total = results.length;
+
+          const ghOutput = process.env.GITHUB_OUTPUT;
+          if (ghOutput) {
+            fs.appendFileSync(ghOutput, `pass=${pass}\nfail=${fail}\nwarn=${warn}\ntotal=${total}\n`);
+          }
+
+          const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+          if (summaryFile) {
+            let md = `### SEP Compliance Report for \`${report.domain}\` (${report.network})\n\n`;
+            md += `| Status | Count |\n| --- | --- |\n`;
+            md += `| Passed | ${pass} |\n`;
+            md += `| Failed | ${fail} |\n`;
+            md += `| Warnings | ${warn} |\n`;
+            md += `| **Total** | **${total}** |\n\n`;
+
+            const failures = results.filter(r => r.status === "fail");
+            if (failures.length > 0) {
+              md += `#### Failing Checks\n\n`;
+              md += `| Check ID | Description | Severity | Message |\n| --- | --- | --- | --- |\n`;
+              for (const f of failures) {
+                md += `| \`${f.id}\` | ${f.description} | ${f.severity} | ${f.message} |\n`;
+              }
+              md += `\n`;
+            }
+
+            const warnings = results.filter(r => r.status === "warn");
+            if (warnings.length > 0) {
+              md += `#### Warnings\n\n`;
+              md += `| Check ID | Description | Severity | Message |\n| --- | --- | --- | --- |\n`;
+              for (const w of warnings) {
+                md += `| \`${w.id}\` | ${w.description} | ${w.severity} | ${w.message} |\n`;
+              }
+              md += `\n`;
+            }
+            fs.appendFileSync(summaryFile, md);
+          }
+        '
+
+    - name: Display Report in Console
+      shell: bash
+      run: |
+        REPORT_FILE="${RUNNER_TEMP}/sep-compliance-report.json"
+        node -e '
+          const fs = require("fs");
+          const { renderTable } = require("${{ github.action_path }}/dist/output/table.js");
+          const { renderHtml } = require("${{ github.action_path }}/dist/output/html.js");
+          const report = JSON.parse(fs.readFileSync("${RUNNER_TEMP}/sep-compliance-report.json", "utf-8"));
+          const format = "${{ inputs.format }}";
+          if (format === "html") {
+            console.log(renderHtml(report));
+          } else if (format === "json") {
+            console.log(JSON.stringify(report, null, 2));
+          } else {
+            console.log(renderTable(report));
+          }
+        '
+
+    - name: Upload Compliance Report Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sep-compliance-report-${{ inputs.network }}
+        path: ${{ runner.temp }}/sep-compliance-report.json
+        if-no-files-found: warn
+
+    - name: Check Conformance Exit Status
+      shell: bash
+      run: |
+        if [ "$CLI_EXIT" -ne 0 ]; then
+          echo "SEP Compliance checks failed with exit code $CLI_EXIT."
+          exit "$CLI_EXIT"
+        fi
