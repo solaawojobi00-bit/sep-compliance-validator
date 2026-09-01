@@ -141,6 +141,44 @@ describe("runSep10Checks", () => {
     expect(structureCheck?.status).toBe("fail");
   });
 
+  it("fails when the challenge transaction server signature has been tampered with", async () => {
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+
+        // Corrupt one byte of the resulting XDR's signature section
+        const tx = TransactionBuilder.fromXDR(challengeXdr, Networks.TESTNET);
+        const sigBytes = tx.signatures[0].signature();
+        sigBytes[0] ^= 0xff;
+        const tamperedXdr = tx.toXDR();
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: tamperedXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      throw new Error("should not reach POST step");
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const structureCheck = results.find((r) => r.id === "sep10.challenge_structure");
+    expect(structureCheck?.status).toBe("fail");
+    expect(structureCheck?.message).toContain("Transaction not signed by server");
+  });
+
   it("skips when WEB_AUTH_ENDPOINT is missing from stellar.toml", async () => {
     const incompleteToml: StellarToml = { raw: {} };
     const results = await runSep10Checks({
