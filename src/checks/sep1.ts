@@ -1,3 +1,4 @@
+import { Networks } from "@stellar/stellar-sdk";
 import { parse } from "smol-toml";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -74,6 +75,7 @@ export function validateHttpsUrl(
 export async function fetchStellarToml(
   domain: string,
   timeoutMs?: number,
+  network: "testnet" | "mainnet" = "testnet",
 ): Promise<{ toml: StellarToml; results: CheckResult[] }> {
   const results: CheckResult[] = [];
   const url = `https://${domain}/.well-known/stellar.toml`;
@@ -111,12 +113,15 @@ export async function fetchStellarToml(
     message: `Fetched ${url}`,
   });
 
-  const parsed = parseStellarToml(text);
+  const parsed = parseStellarToml(text, network);
   results.push(...parsed.results);
   return { toml: parsed.toml, results };
 }
 
-export function parseStellarToml(text: string): {
+export function parseStellarToml(
+  text: string,
+  network: "testnet" | "mainnet" = "testnet",
+): {
   toml: StellarToml;
   results: CheckResult[];
 } {
@@ -211,6 +216,30 @@ export function parseStellarToml(text: string): {
             "NETWORK_PASSPHRASE not declared; assuming the target network's passphrase",
         },
   );
+
+  const expectedPassphrase =
+    network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+  const recommendedNetwork = network === "mainnet" ? "testnet" : "mainnet";
+
+  if (networkPassphrase) {
+    if (networkPassphrase === expectedPassphrase) {
+      results.push({
+        id: "sep1.network_passphrase_value",
+        description: "NETWORK_PASSPHRASE matches target network",
+        status: "pass",
+        severity: "error",
+        message: `NETWORK_PASSPHRASE matches ${network} (${expectedPassphrase})`,
+      });
+    } else {
+      results.push({
+        id: "sep1.network_passphrase_value",
+        description: "NETWORK_PASSPHRASE matches target network",
+        status: "fail",
+        severity: "error",
+        message: `NETWORK_PASSPHRASE "${networkPassphrase}" does not match target network ${network} (expected "${expectedPassphrase}"). Try running with --network ${recommendedNetwork}`,
+      });
+    }
+  }
 
   // Validate optional service endpoints (silent when absent)
   const anchorQuoteServer = validateHttpsUrl(

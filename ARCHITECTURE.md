@@ -41,11 +41,11 @@ touchpoints are:
   fresh testnet client account for each SEP-10 run — no funding or Horizon
   submission needed, since SEP-10 challenge transactions are never submitted
   to the network; they exist only to be signed and returned.
-- **Network passphrase validation:** cross-checks the anchor's declared
-  `NETWORK_PASSPHRASE` in `stellar.toml` against the actual passphrase used
-  in the challenge transaction (`Networks.TESTNET`, i.e.
-  `"Test SDF Network ; September 2015"`), catching a real and common anchor
-  misconfiguration (testnet/mainnet passphrase mismatches).
+- **Network passphrase validation:** validates the anchor's declared
+  `NETWORK_PASSPHRASE` in `stellar.toml` against the target network's
+  passphrase (`Networks.TESTNET` or `Networks.PUBLIC`) with an actionable failure
+  recommending the correct `--network` flag, and ensures the challenge transaction's
+  passphrase matches the resolved network, preventing cascading downstream failures.
 - **Horizon** is not required for v1's checks (SEP-10 doesn't touch Horizon
   directly). It becomes relevant in Phase 2 for SEP-6/SEP-24 flows that may
   need to confirm on-chain transaction effects.

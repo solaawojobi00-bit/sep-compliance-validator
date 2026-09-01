@@ -58,6 +58,17 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     return results;
   }
 
+  if (toml.networkPassphrase && toml.networkPassphrase !== networkPassphrase) {
+    results.push({
+      id: "sep10.skipped",
+      description: "Run SEP-10 challenge/response flow",
+      status: "warn",
+      severity: "error",
+      message: `Skipped: stellar.toml NETWORK_PASSPHRASE ("${toml.networkPassphrase}") does not match target network passphrase ("${networkPassphrase}")`,
+    });
+    return results;
+  }
+
   const webAuthEndpoint = toml.webAuthEndpoint;
   const signingKey = toml.signingKey;
   let webAuthDomain: string;

@@ -97,7 +97,7 @@ program
 
       try {
         const sep1Results = await guardChecker("sep1", "Fetch and validate stellar.toml", async () => {
-          const res = await fetchStellarToml(domain, timeoutMs);
+          const res = await fetchStellarToml(domain, timeoutMs, network);
           toml = res.toml;
           return res.results;
         });
@@ -106,7 +106,7 @@ program
         let clientSigningKey: string | undefined;
         if (options.clientDomain) {
           const clientTomlResults = await guardChecker("sep1.client", "Fetch client domain stellar.toml", async () => {
-            const res = await fetchStellarToml(options.clientDomain!, timeoutMs);
+            const res = await fetchStellarToml(options.clientDomain!, timeoutMs, network);
             clientSigningKey = res.toml.signingKey;
             return res.results;
           });

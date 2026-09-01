@@ -713,7 +713,8 @@ describe("runSep10Checks", () => {
       } as Response;
     }) as unknown as typeof fetch;
 
-    const results = await runSep10Checks({ domain, toml, network: "mainnet" });
+    const mainnetToml = { ...toml, networkPassphrase: Networks.PUBLIC };
+    const results = await runSep10Checks({ domain, toml: mainnetToml, network: "mainnet" });
     const structureCheck = results.find((r) => r.id === "sep10.challenge_structure");
     const networkCheck = results.find((r) => r.id === "sep10.network_passphrase_match");
     const submitCheck = results.find((r) => r.id === "sep10.submit_challenge");
@@ -721,5 +722,29 @@ describe("runSep10Checks", () => {
     expect(structureCheck?.status).toBe("pass");
     expect(networkCheck?.status).toBe("pass");
     expect(submitCheck?.status).toBe("pass");
+  });
+
+  it("skips SEP-10 checks when toml.networkPassphrase does not match target network", async () => {
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy;
+
+    const mismatchToml: StellarToml = {
+      raw: {},
+      webAuthEndpoint: `https://${domain}/auth`,
+      signingKey: serverKeypair.publicKey(),
+      networkPassphrase: Networks.PUBLIC,
+    };
+
+    const results = await runSep10Checks({
+      domain,
+      toml: mismatchToml,
+      network: "testnet",
+    });
+
+    expect(results.length).toBe(1);
+    expect(results[0].id).toBe("sep10.skipped");
+    expect(results[0].status).toBe("warn");
+    expect(results[0].message).toContain("does not match target network passphrase");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
