@@ -26,6 +26,10 @@ program
   .option("-f, --format <format>", "output format: table, json, or html", "table")
   .option("--client-domain <domain>", "Client domain for SEP-10 client_domain verification")
   .option("-t, --timeout <ms>", "Request timeout in milliseconds", "10000")
+  .option(
+    "--i-understand-this-touches-production",
+    "Explicit confirmation required when running checks against mainnet",
+  )
   .action(
     async (
       domain: string,
@@ -34,8 +38,21 @@ program
         format: string;
         clientDomain?: string;
         timeout: string;
+        iUnderstandThisTouchesProduction?: boolean;
       },
     ) => {
+      if (
+        options.network === "mainnet" &&
+        !options.iUnderstandThisTouchesProduction
+      ) {
+        console.error(
+          "Error: Running checks against mainnet touches production anchor infrastructure. " +
+            "To confirm, re-run with the flag: --i-understand-this-touches-production",
+        );
+        process.exitCode = 1;
+        return;
+      }
+
       const network = options.network === "mainnet" ? "mainnet" : "testnet";
       const timeoutMs = parseInt(options.timeout, 10) || 10000;
       const results: CheckResult[] = [];

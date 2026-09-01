@@ -677,4 +677,49 @@ describe("runSep10Checks", () => {
     expect(reqCheck?.status).toBe("fail");
     expect(reqCheck?.message).toContain("timed out after 25ms");
   });
+
+  it("exercises mainnet network branch using Networks.PUBLIC", async () => {
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input as string;
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+      if (!init || init.method === undefined) {
+        const url = new URL(urlStr);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300,
+          Networks.PUBLIC,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.PUBLIC,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(capturedAccount) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "mainnet" });
+    const structureCheck = results.find((r) => r.id === "sep10.challenge_structure");
+    const networkCheck = results.find((r) => r.id === "sep10.network_passphrase_match");
+    const submitCheck = results.find((r) => r.id === "sep10.submit_challenge");
+
+    expect(structureCheck?.status).toBe("pass");
+    expect(networkCheck?.status).toBe("pass");
+    expect(submitCheck?.status).toBe("pass");
+  });
 });
