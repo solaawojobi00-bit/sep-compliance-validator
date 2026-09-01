@@ -63,6 +63,34 @@ SEP Compliance Report for testanchor.stellar.org (testnet)
 
 The process exits non-zero if any check fails, so it can be used as a CI gate.
 
+## GitHub Action for Anchor CI Pipelines
+
+You can use this validator directly as a GitHub Action in your anchor repository to automatically gate pull requests and deployments on SEP conformance.
+
+Add a workflow file (e.g. `.github/workflows/sep-compliance.yml`):
+
+```yaml
+name: SEP Compliance Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-anchor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Staging Anchor
+        uses: solaawojobi00-bit/sep-compliance-validator@main
+        with:
+          domain: "staging.anchor.example.com"
+          network: "testnet"
+          format: "table"
+```
+
+The action fails the calling workflow (non-zero exit) whenever any check fails, blocking non-conformant changes from being merged.
+
 ## Publishing to npm
 
 The repository includes a GitHub Actions workflow (`.github/workflows/publish.yml`) that automates publishing releases to npm when a version tag (e.g. `v0.1.0`) is pushed.

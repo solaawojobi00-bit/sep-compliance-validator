@@ -1,0 +1,48 @@
+name: "Stellar SEP Compliance Validator"
+description: "Run automated conformance checks against a Stellar anchor's SEP implementation"
+author: "solaawojobi00-bit"
+
+inputs:
+  domain:
+    description: "Anchor home domain, e.g. example.com or testanchor.stellar.org"
+    required: true
+  network:
+    description: "Target network (testnet or mainnet)"
+    required: false
+    default: "testnet"
+  format:
+    description: "Output format: table, json, or html"
+    required: false
+    default: "table"
+  client-domain:
+    description: "Client domain for SEP-10 client_domain verification"
+    required: false
+  timeout:
+    description: "Request timeout in milliseconds"
+    required: false
+    default: "10000"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+
+    - name: Build validator dist if missing
+      shell: bash
+      run: |
+        if [ ! -f "${{ github.action_path }}/dist/cli.js" ]; then
+          npm --prefix "${{ github.action_path }}" ci
+          npm --prefix "${{ github.action_path }}" run build
+        fi
+
+    - name: Run SEP Compliance Validator
+      shell: bash
+      run: |
+        ARGS=("check" "${{ inputs.domain }}" "--network" "${{ inputs.network }}" "--format" "${{ inputs.format }}" "--timeout" "${{ inputs.timeout }}")
+        if [ -n "${{ inputs.client-domain }}" ]; then
+          ARGS+=("--client-domain" "${{ inputs.client-domain }}")
+        fi
+        node "${{ github.action_path }}/dist/cli.js" "${ARGS[@]}"
