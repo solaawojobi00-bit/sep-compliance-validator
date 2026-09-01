@@ -39,8 +39,18 @@ jobs:
 
     - name: Smoke test composite GitHub Action
       if: matrix.node-version == '22.x'
+      id: test-action
       uses: ./
       continue-on-error: true
       with:
         domain: testanchor.stellar.org
         network: testnet
+
+    - name: Verify Action execution and outputs
+      if: matrix.node-version == '22.x'
+      run: |
+        echo "Outputs - Total: ${{ steps.test-action.outputs.total }}, Pass: ${{ steps.test-action.outputs.pass }}, Fail: ${{ steps.test-action.outputs.fail }}, Warn: ${{ steps.test-action.outputs.warn }}"
+        echo "Report Path: ${{ steps.test-action.outputs.report-path }}"
+        test -n "${{ steps.test-action.outputs.total }}"
+        test -n "${{ steps.test-action.outputs.pass }}"
+        test -f "${{ steps.test-action.outputs.report-path }}"

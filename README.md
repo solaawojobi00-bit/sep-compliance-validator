@@ -80,7 +80,31 @@ The process exits non-zero if any check fails, so it can be used as a CI gate.
 
 You can use this validator directly as a GitHub Action in your anchor repository to automatically gate pull requests and deployments on SEP conformance.
 
-Add a workflow file (e.g. `.github/workflows/sep-compliance.yml`):
+### Action Inputs
+
+| Input | Description | Default |
+|---|---|---|
+| `domain` | Anchor home domain to validate (**required**) | — |
+| `network` | Target network (`testnet` or `mainnet`) | `testnet` |
+| `format` | Console log format (`table`, `json`, or `html`) | `table` |
+| `timeout` | Request timeout in milliseconds | `10000` |
+| `client-domain` | Client domain for SEP-10 verification | — |
+| `confirm-mainnet` | Set to `true` to confirm testing against production anchor on mainnet | `false` |
+| `fail-on-warn` | Set to `true` to treat warning checks as failures | `false` |
+| `only` | Comma-separated list of SEPs to validate (e.g. `sep1,sep10`) | — |
+| `interactive-browser`| Run headless browser checks against SEP-24 interactive URL | `false` |
+
+### Action Outputs
+
+| Output | Description |
+|---|---|
+| `pass` | Number of passed checks |
+| `fail` | Number of failed checks |
+| `warn` | Number of warning checks |
+| `total` | Total number of checks executed |
+| `report-path` | File path to the generated JSON compliance report |
+
+### Example Workflow
 
 ```yaml
 name: SEP Compliance Check
@@ -95,14 +119,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate Staging Anchor
+        id: validator
         uses: solaawojobi00-bit/sep-compliance-validator@main
         with:
           domain: "staging.anchor.example.com"
           network: "testnet"
           format: "table"
+          fail-on-warn: "true"
+
+      - name: Report Summary Metrics
+        if: always()
+        run: |
+          echo "Validator results: ${{ steps.validator.outputs.pass }}/${{ steps.validator.outputs.total }} passed"
+          echo "Report saved to ${{ steps.validator.outputs.report-path }}"
 ```
 
-The action fails the calling workflow (non-zero exit) whenever any check fails, blocking non-conformant changes from being merged.
+The action:
+- Generates a Markdown summary table under `$GITHUB_STEP_SUMMARY` in the Actions UI.
+- Uploads the full JSON report as a workflow artifact named `sep-compliance-report-<network>`.
+- Fails the step (non-zero exit) whenever any check fails (or on warnings if `fail-on-warn: "true"`), blocking non-conformant changes from being merged.
 
 ## Publishing to npm
 
