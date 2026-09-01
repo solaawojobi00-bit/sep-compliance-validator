@@ -30,7 +30,12 @@ jobs:
       run: npm run build
       
     - name: Run tests
+      if: matrix.node-version != '22.x'
       run: npm test
+
+    - name: Run tests with coverage gate
+      if: matrix.node-version == '22.x'
+      run: npm run test:coverage
 
     - name: Smoke test composite GitHub Action
       if: matrix.node-version == '22.x'
