@@ -36,6 +36,10 @@ inputs:
     description: "Run headless browser automation against SEP-24 interactive URL"
     required: false
     default: "false"
+  no-write:
+    description: "Disable state-mutating requests (e.g. SEP-12 PUT /customer)"
+    required: false
+    default: "false"
 
 outputs:
   pass:
@@ -96,6 +100,9 @@ runs:
         fi
         if [ "${{ inputs.interactive-browser }}" = "true" ]; then
           ARGS+=("--interactive-browser")
+        fi
+        if [ "${{ inputs.no-write }}" = "true" ]; then
+          ARGS+=("--no-write")
         fi
 
         set +e

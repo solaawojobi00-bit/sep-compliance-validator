@@ -47,6 +47,7 @@ program
   )
   .option("--memo <id>", "Numeric ID memo for SEP-10 challenge authentication")
   .option("--muxed", "Authenticate using a muxed (M...) account for SEP-10")
+  .option("--no-write", "Disable state-mutating requests (e.g. SEP-12 PUT /customer)")
   .action(
     async (
       domain: string,
@@ -63,6 +64,8 @@ program
         interactiveBrowser?: boolean;
         memo?: string;
         muxed?: boolean;
+        noWrite?: boolean;
+        write?: boolean;
       },
     ) => {
       // 1. Validate --format
@@ -249,6 +252,7 @@ program
                     network,
                     jwt: jwt!,
                     timeoutMs,
+                    noWrite: options.noWrite === true || options.write === false,
                   });
                 });
                 results.push(...sep12Results);
