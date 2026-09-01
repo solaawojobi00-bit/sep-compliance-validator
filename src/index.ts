@@ -1,6 +1,6 @@
 // SEP-1
-export { fetchStellarToml, parseStellarToml } from "./checks/sep1.js";
-export type { StellarToml } from "./checks/sep1.js";
+export { fetchStellarToml, parseStellarToml, validateCurrencies } from "./checks/sep1.js";
+export type { StellarToml, Currency } from "./checks/sep1.js";
 
 // SEP-10
 export {
