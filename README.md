@@ -13,12 +13,19 @@ for design details.
 
 ## Status
 
-Phase 1 (this repo's current state): SEP-1 discovery/validation, the full
-SEP-10 challenge/response flow (including negative-case handling: wrong
-signer, wrong home domain, malformed JWT), SEP-12 KYC field conformance checks,
-SEP-24 interactive deposit/withdraw endpoint checks, and SEP-38 price/quote
-endpoint conformance checks. Later phases (mainnet support, CI packaging)
-are tracked as GitHub issues.
+**Delivered (v1):**
+- SEP-1 discovery and `[[CURRENCIES]]` asset table validation.
+- SEP-10 web authentication challenge/response flow, JWKS verification, custodial memo and muxed accounts, client domain verification, and negative-case challenge validation.
+- SEP-12 KYC customer probing, synthetic identity generation, DELETE teardown, and `--no-write` read-only mode.
+- SEP-24 interactive deposit/withdraw endpoints and Playwright headless browser automation (`--interactive-browser`).
+- SEP-38 price and quote endpoint conformance checks.
+- Formats: Table, JSON, and standalone HTML dashboard reports.
+- Opt-in mainnet production validation guard (`--i-understand-this-touches-production`).
+- Reusable GitHub Action composite workflow (`action.yml`) with job summaries and step outputs.
+
+**Future Phases:**
+- SEP-6 programmatic transfer flows.
+- Hosted public dashboard web application (see [`docs/dashboard-design.md`](./docs/dashboard-design.md)).
 
 ## Install & use
 
