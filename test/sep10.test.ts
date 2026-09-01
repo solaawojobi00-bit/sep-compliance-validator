@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Keypair, Networks, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Account, Keypair, MuxedAccount, Networks, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import * as jose from "jose";
 import { runSep10Checks } from "../src/checks/sep10.js";
 import type { StellarToml } from "../src/checks/sep1.js";
@@ -15,13 +15,16 @@ function fakeJwt(
   extraClaims: Record<string, unknown> = {},
   alg = "EdDSA",
 ): string {
+  const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg, typ: "JWT" })).toString(
     "base64url",
   );
   const payload = Buffer.from(
     JSON.stringify({
+      iss: `https://${domain}/auth`,
+      iat: now,
       sub,
-      exp: Math.floor(Date.now() / 1000) + expiresInSeconds,
+      exp: now + expiresInSeconds,
       ...extraClaims,
     }),
   ).toString("base64url");
@@ -772,3 +775,148 @@ describe("runSep10Checks", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("SEP-10 JWT claims validation (iss, iat, sub)", () => {
+  const serverKeypair = Keypair.random();
+  const toml: StellarToml = {
+    raw: {},
+    webAuthEndpoint,
+    signingKey: serverKeypair.publicKey(),
+    networkPassphrase: Networks.TESTNET,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function setupAuthMock(createToken: (account: string) => string) {
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      const postBody = JSON.parse((init as any).body) as { transaction: string };
+      const { clientAccountID } = WebAuth.readChallengeTx(
+        postBody.transaction,
+        serverKeypair.publicKey(),
+        Networks.TESTNET,
+        [domain],
+        webAuthDomain,
+      );
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: createToken(clientAccountID) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  it("passes when iss, iat, and exact G... sub are valid", async () => {
+    setupAuthMock((account) => fakeJwt(account));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+
+    const issCheck = results.find((r) => r.id === "sep10.jwt_issuer");
+    const iatCheck = results.find((r) => r.id === "sep10.jwt_issued_at");
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+
+    expect(issCheck?.status).toBe("pass");
+    expect(iatCheck?.status).toBe("pass");
+    expect(subCheck?.status).toBe("pass");
+  });
+
+  it("fails when iss is missing", async () => {
+    setupAuthMock((account) => {
+      const now = Math.floor(Date.now() / 1000);
+      const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
+      const payload = Buffer.from(
+        JSON.stringify({
+          sub: account,
+          iat: now,
+          exp: now + 3600,
+        }),
+      ).toString("base64url");
+      return `${header}.${payload}.fakesig`;
+    });
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const issCheck = results.find((r) => r.id === "sep10.jwt_issuer");
+    expect(issCheck?.status).toBe("fail");
+    expect(issCheck?.message).toContain('JWT "iss" claim is missing');
+  });
+
+  it("fails when iss host does not match anchor domain or web_auth_domain", async () => {
+    setupAuthMock((account) => fakeJwt(account, 3600, { iss: "https://malicious-anchor.com/auth" }));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const issCheck = results.find((r) => r.id === "sep10.jwt_issuer");
+    expect(issCheck?.status).toBe("fail");
+    expect(issCheck?.message).toContain('JWT iss host "malicious-anchor.com" does not match');
+  });
+
+  it("fails when iat is missing or non-numeric", async () => {
+    setupAuthMock((account) => fakeJwt(account, 3600, { iat: "not-a-number" }));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const iatCheck = results.find((r) => r.id === "sep10.jwt_issued_at");
+    expect(iatCheck?.status).toBe("fail");
+    expect(iatCheck?.message).toContain('JWT "iat" claim is missing or not a number');
+  });
+
+  it("fails when iat is in the future beyond clock skew tolerance", async () => {
+    const futureIat = Math.floor(Date.now() / 1000) + 300;
+    setupAuthMock((account) => fakeJwt(account, 3600, { iat: futureIat }));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const iatCheck = results.find((r) => r.id === "sep10.jwt_issued_at");
+    expect(iatCheck?.status).toBe("fail");
+    expect(iatCheck?.message).toContain("is in the future");
+  });
+
+  it("passes when sub has valid numeric memo (G...:<digits>)", async () => {
+    setupAuthMock((account) => fakeJwt(`${account}:17509749319012223907`));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+    expect(subCheck?.status).toBe("pass");
+  });
+
+  it("fails when sub has non-numeric memo suffix", async () => {
+    setupAuthMock((account) => fakeJwt(`${account}:notdigits`));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+    expect(subCheck?.status).toBe("fail");
+    expect(subCheck?.message).toContain("memo suffix must be digits");
+  });
+
+  it("fails when sub has arbitrary trailing characters (loose startsWith rejected)", async () => {
+    setupAuthMock((account) => fakeJwt(`${account}EXTRA_GARBAGE`));
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+    expect(subCheck?.status).toBe("fail");
+    expect(subCheck?.message).toContain("expected exact");
+  });
+
+  it("passes when sub is a valid muxed account (M...) corresponding to the client account", async () => {
+    setupAuthMock((account) => {
+      const muxed = new MuxedAccount(new Account(account, "0"), "12345");
+      return fakeJwt(muxed.accountId());
+    });
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+    expect(subCheck?.status).toBe("pass");
+    expect(subCheck?.message).toContain("muxed account");
+  });
+});
+

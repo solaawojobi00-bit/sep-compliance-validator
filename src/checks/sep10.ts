@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { Keypair, Networks, StrKey, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Keypair, MuxedAccount, Networks, StrKey, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -417,28 +417,108 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
     }
 
     const payload = decodeJwtPayload(jwt);
+    const iss = typeof payload.iss === "string" ? payload.iss : undefined;
     const sub = typeof payload.sub === "string" ? payload.sub : undefined;
+    const iat = typeof payload.iat === "number" ? payload.iat : undefined;
     const exp = typeof payload.exp === "number" ? payload.exp : undefined;
-
-    results.push(
-      sub?.startsWith(parsedClientAccountId)
-        ? {
-            id: "sep10.jwt_subject",
-            description: 'JWT "sub" claim matches the client account',
-            status: "pass",
-            severity: "error",
-            message: `sub = ${sub}`,
-          }
-        : {
-            id: "sep10.jwt_subject",
-            description: 'JWT "sub" claim matches the client account',
-            status: "fail",
-            severity: "error",
-            message: `Expected sub to start with ${parsedClientAccountId}, got ${sub}`,
-          },
-    );
-
     const now = Math.floor(Date.now() / 1000);
+
+    // Validate iss
+    let issValid = false;
+    let issMessage = "";
+    if (!iss) {
+      issMessage = 'JWT "iss" claim is missing or not a string';
+    } else {
+      try {
+        const parsedIss = new URL(iss);
+        const issHost = parsedIss.host.toLowerCase();
+        const expectedHosts = [
+          domain.toLowerCase(),
+          webAuthDomain.toLowerCase(),
+        ];
+        const matches = expectedHosts.some(
+          (h) => issHost === h || issHost.endsWith("." + h),
+        );
+        if (matches) {
+          issValid = true;
+          issMessage = `iss = ${iss}`;
+        } else {
+          issMessage = `JWT iss host "${issHost}" does not match domain "${domain}" or web_auth_domain "${webAuthDomain}"`;
+        }
+      } catch {
+        issMessage = `JWT "iss" claim "${iss}" is not a valid URI`;
+      }
+    }
+
+    results.push({
+      id: "sep10.jwt_issuer",
+      description: 'JWT "iss" claim matches anchor domain or WEB_AUTH_ENDPOINT host',
+      status: issValid ? "pass" : "fail",
+      severity: "error",
+      message: issMessage,
+    });
+
+    // Validate iat
+    const iatTolerance = 60; // 60s clock-skew tolerance
+    let iatValid = false;
+    let iatMessage = "";
+    if (iat === undefined || Number.isNaN(iat)) {
+      iatMessage = 'JWT "iat" claim is missing or not a number';
+    } else if (iat > now + iatTolerance) {
+      iatMessage = `JWT "iat" claim (${iat}) is in the future (now=${now}, tolerance=${iatTolerance}s)`;
+    } else {
+      iatValid = true;
+      iatMessage = `iat = ${iat}`;
+    }
+
+    results.push({
+      id: "sep10.jwt_issued_at",
+      description: 'JWT "iat" claim is present, numeric, and not in the future',
+      status: iatValid ? "pass" : "fail",
+      severity: "error",
+      message: iatMessage,
+    });
+
+    // Validate sub (exact G..., exact G...:<digits>, or exact M... muxed account)
+    let subValid = false;
+    let subMessage = "";
+
+    if (!sub) {
+      subMessage = `Expected sub to be ${parsedClientAccountId}, got ${sub ?? "missing"}`;
+    } else if (sub === parsedClientAccountId) {
+      subValid = true;
+      subMessage = `sub = ${sub}`;
+    } else if (sub.startsWith(`${parsedClientAccountId}:`)) {
+      const memo = sub.slice(parsedClientAccountId.length + 1);
+      if (/^\d+$/.test(memo)) {
+        subValid = true;
+        subMessage = `sub = ${sub}`;
+      } else {
+        subMessage = `Invalid sub "${sub}": memo suffix must be digits, expected ${parsedClientAccountId}:<digits>`;
+      }
+    } else if (StrKey.isValidMed25519PublicKey(sub)) {
+      try {
+        const base = MuxedAccount.fromAddress(sub, "0").baseAccount().accountId();
+        if (base === parsedClientAccountId) {
+          subValid = true;
+          subMessage = `sub = ${sub} (muxed account for ${parsedClientAccountId})`;
+        } else {
+          subMessage = `Invalid muxed sub "${sub}": base account ${base} does not match ${parsedClientAccountId}`;
+        }
+      } catch {
+        subMessage = `Invalid muxed sub "${sub}"`;
+      }
+    } else {
+      subMessage = `Invalid sub "${sub}": expected exact ${parsedClientAccountId}, ${parsedClientAccountId}:<digits>, or valid M... muxed account`;
+    }
+
+    results.push({
+      id: "sep10.jwt_subject",
+      description: 'JWT "sub" claim matches the client account',
+      status: subValid ? "pass" : "fail",
+      severity: "error",
+      message: subMessage,
+    });
     results.push(
       exp !== undefined && exp > now
         ? {
