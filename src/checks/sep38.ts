@@ -6,6 +6,7 @@ export interface Sep38Options {
   domain: string;
   toml: StellarToml;
   network: "testnet" | "mainnet";
+  timeoutMs?: number;
 }
 
 export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]> {
@@ -33,7 +34,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
 
   // 1. GET /info (discover supported assets)
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/info`);
+    const res = await fetchWithTimeout(`${baseUrl}/info`, {}, opts.timeoutMs);
     if (!res.ok) {
       results.push({
         id: "sep38.info",
@@ -83,7 +84,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
 
   // 2. Negative check: GET /prices requires either sell_asset or buy_asset
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/prices`);
+    const res = await fetchWithTimeout(`${baseUrl}/prices`, {}, opts.timeoutMs);
     if (res.status === 400 || (res.status >= 400 && res.status < 500)) {
       results.push({
         id: "sep38.prices_missing_assets",
@@ -116,6 +117,8 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
     const malformedAsset = "not-a-valid-asset";
     const res = await fetchWithTimeout(
       `${baseUrl}/prices?sell_asset=${encodeURIComponent(malformedAsset)}`,
+      {},
+      opts.timeoutMs,
     );
     if (res.status === 400 || (res.status >= 400 && res.status < 500)) {
       results.push({
@@ -148,6 +151,8 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
   try {
     const res = await fetchWithTimeout(
       `${baseUrl}/prices?sell_asset=${encodeURIComponent(sellAsset)}`,
+      {},
+      opts.timeoutMs,
     );
     if (!res.ok) {
       results.push({
@@ -257,7 +262,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       sellAsset,
     )}&buy_asset=${encodeURIComponent(buyAsset)}&sell_amount=100`;
 
-    const res = await fetchWithTimeout(priceUrl);
+    const res = await fetchWithTimeout(priceUrl, {}, opts.timeoutMs);
     if (!res.ok) {
       results.push({
         id: "sep38.price_schema",

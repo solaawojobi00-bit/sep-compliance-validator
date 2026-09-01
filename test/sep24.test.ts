@@ -275,4 +275,31 @@ describe("runSep24Checks", () => {
     const txCheck = results.find((r) => r.id === "sep24.transaction_status");
     expect(txCheck?.status).toBe("fail");
   });
+
+  it("fails fast when info request exceeds configured timeoutMs", async () => {
+    global.fetch = vi.fn(async (_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = (init as RequestInit)?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const err = new Error("This operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    }) as unknown as typeof fetch;
+
+    const results = await runSep24Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+      timeoutMs: 25,
+    });
+    const infoCheck = results.find((r) => r.id === "sep24.info");
+    expect(infoCheck?.status).toBe("fail");
+    expect(infoCheck?.message).toContain("timed out after 25ms");
+  });
 });
+
