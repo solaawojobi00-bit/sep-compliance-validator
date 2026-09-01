@@ -22,6 +22,16 @@ are tracked as GitHub issues.
 
 ## Install & use
 
+### Zero-Install via npx
+
+Run directly against any Stellar anchor with zero setup:
+
+```bash
+npx sep-compliance-validator check <domain> [--network testnet|mainnet] [--format table|json|html] [--client-domain <domain>] [--timeout <ms>] [--i-understand-this-touches-production]
+```
+
+### From Local Source
+
 ```bash
 npm install
 npm run build
@@ -39,7 +49,7 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 ### Example
 
 ```bash
-node dist/cli.js check testanchor.stellar.org --network testnet
+npx sep-compliance-validator check testanchor.stellar.org --network testnet
 ```
 
 Runs against [Stellar's official testnet reference anchor](https://testanchor.stellar.org)
@@ -53,6 +63,13 @@ SEP Compliance Report for testanchor.stellar.org (testnet)
 
 The process exits non-zero if any check fails, so it can be used as a CI gate.
 
+## Publishing to npm
+
+The repository includes a GitHub Actions workflow (`.github/workflows/publish.yml`) that automates publishing releases to npm when a version tag (e.g. `v0.1.0`) is pushed.
+
+> [!NOTE]
+> Automated publishing requires the repository secret `NPM_TOKEN` to be configured with an npm access token that has publishing permissions for `sep-compliance-validator`.
+
 ## Contributing & Development
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for local dev setup instructions and a step-by-step walkthrough on how to add a checker for a new SEP.
@@ -61,4 +78,5 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for local dev setup instructions and a 
 npm test        # run the test suite (vitest)
 npm run build   # compile TypeScript to dist/
 ```
+
 
