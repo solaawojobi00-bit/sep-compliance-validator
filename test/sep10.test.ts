@@ -306,4 +306,75 @@ describe("runSep10Checks", () => {
     const opCheck = results.find((r) => r.id === "sep10.client_domain_operation");
     expect(opCheck?.status).toBe("fail");
   });
+
+  it("passes timebounds check when challenge validity window is within 15 minutes", async () => {
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300, // 5 minutes <= 15 minutes
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(capturedAccount) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const tbCheck = results.find((r) => r.id === "sep10.challenge_timebounds_reasonable");
+    expect(tbCheck?.status).toBe("pass");
+  });
+
+  it("fails timebounds check when challenge validity window exceeds 15 minutes", async () => {
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          1800, // 30 minutes > 15 minutes
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(capturedAccount) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const tbCheck = results.find((r) => r.id === "sep10.challenge_timebounds_reasonable");
+    expect(tbCheck?.status).toBe("fail");
+    expect(tbCheck?.message).toContain("exceeds maximum recommended 900s");
+  });
 });
