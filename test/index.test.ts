@@ -18,6 +18,9 @@ describe("package entrypoint exports (src/index.ts)", () => {
     expect(index.runSep10Checks).toBeDefined();
     expect(typeof index.runSep10Checks).toBe("function");
 
+    expect(index.runSep10NegativeChecks).toBeDefined();
+    expect(typeof index.runSep10NegativeChecks).toBe("function");
+
     expect(index.runSep12Checks).toBeDefined();
     expect(typeof index.runSep12Checks).toBe("function");
 

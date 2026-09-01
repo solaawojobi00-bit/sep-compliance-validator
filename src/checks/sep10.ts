@@ -19,8 +19,12 @@ export interface Sep10Options {
   onJwt?: (jwt: string) => void;
 }
 
+export { runSep10NegativeChecks, type Sep10NegativeOptions } from "./sep10-negative.js";
+
 export interface Sep10Result extends Array<CheckResult> {
   jwt?: string;
+  challengeXdr?: string;
+  clientKeypair?: Keypair;
 }
 
 function decodeJwtHeader(jwt: string): Record<string, unknown> {
@@ -133,6 +137,8 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       return results;
     }
     challengeXdr = body.transaction;
+    results.challengeXdr = challengeXdr;
+    results.clientKeypair = clientKeypair;
     responseNetworkPassphrase = body.network_passphrase;
     results.push({
       id: "sep10.challenge_request",

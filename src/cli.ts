@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { fetchStellarToml, type StellarToml } from "./checks/sep1.js";
-import { runSep10Checks } from "./checks/sep10.js";
+import { runSep10Checks, runSep10NegativeChecks } from "./checks/sep10.js";
 import { runSep12Checks } from "./checks/sep12.js";
 import { runSep24Checks } from "./checks/sep24.js";
 import { runSep38Checks } from "./checks/sep38.js";
@@ -129,6 +129,25 @@ program
           const sep10Succeeded =
             Boolean((sep10Results as any).jwt) &&
             !sep10Results.some((r) => r.status === "fail");
+
+          if (sep10Succeeded) {
+            const sep10NegResults = await guardChecker(
+              "sep10.negative",
+              "Run SEP-10 negative-case challenge validation",
+              async () => {
+                return await runSep10NegativeChecks({
+                  webAuthEndpoint: toml!.webAuthEndpoint!,
+                  domain,
+                  network,
+                  serverSigningKey: toml!.signingKey!,
+                  challengeXdr: (sep10Results as any).challengeXdr,
+                  clientKeypair: (sep10Results as any).clientKeypair,
+                  timeoutMs,
+                });
+              },
+            );
+            results.push(...sep10NegResults);
+          }
 
           const kycServer =
             toml.kycServer ??
