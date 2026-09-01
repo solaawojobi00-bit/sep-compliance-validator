@@ -10,6 +10,7 @@ export interface StellarToml {
   anchorQuoteServer?: string;
   kycServer?: string;
   transferServer?: string;
+  transferServerSep24?: string;
 }
 
 export async function fetchStellarToml(
@@ -144,6 +145,11 @@ export async function fetchStellarToml(
   const transferServer =
     typeof raw.TRANSFER_SERVER === "string" ? raw.TRANSFER_SERVER : undefined;
 
+  const transferServerSep24 =
+    typeof raw.TRANSFER_SERVER_SEP0024 === "string"
+      ? raw.TRANSFER_SERVER_SEP0024
+      : undefined;
+
   return {
     toml: {
       raw,
@@ -153,6 +159,7 @@ export async function fetchStellarToml(
       anchorQuoteServer,
       kycServer,
       transferServer,
+      transferServerSep24,
     },
     results,
   };
