@@ -1,4 +1,4 @@
-import { Networks } from "@stellar/stellar-sdk";
+import { Networks, StrKey } from "@stellar/stellar-sdk";
 import { parse } from "smol-toml";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -14,6 +14,7 @@ export interface StellarToml {
   transferServerSep24?: string;
   directPaymentServer?: string;
   jwksUri?: string;
+  accounts?: string[];
 }
 
 export function validateHttpsUrl(
@@ -196,6 +197,26 @@ export function parseStellarToml(
         },
   );
 
+  if (signingKey) {
+    if (StrKey.isValidEd25519PublicKey(signingKey)) {
+      results.push({
+        id: "sep1.signing_key_format",
+        description: "SIGNING_KEY is a well-formed Stellar ed25519 public key",
+        status: "pass",
+        severity: "error",
+        message: `SIGNING_KEY is a valid Stellar ed25519 public key: ${signingKey}`,
+      });
+    } else {
+      results.push({
+        id: "sep1.signing_key_format",
+        description: "SIGNING_KEY is a well-formed Stellar ed25519 public key",
+        status: "fail",
+        severity: "error",
+        message: `SIGNING_KEY "${signingKey}" is not a valid Stellar ed25519 public key (must be a 56-character string starting with 'G')`,
+      });
+    }
+  }
+
   const networkPassphrase =
     typeof raw.NETWORK_PASSPHRASE === "string" ? raw.NETWORK_PASSPHRASE : undefined;
   results.push(
@@ -281,6 +302,51 @@ export function parseStellarToml(
     jwksUri = validateHttpsUrl("JWKS", raw.JWKS, results);
   }
 
+  // Extract and validate ACCOUNTS if declared
+  let accounts: string[] | undefined;
+  if (raw.ACCOUNTS !== undefined) {
+    if (Array.isArray(raw.ACCOUNTS)) {
+      accounts = [];
+      const invalidEntries: { index: number; value: unknown }[] = [];
+      raw.ACCOUNTS.forEach((entry, idx) => {
+        if (typeof entry === "string" && StrKey.isValidEd25519PublicKey(entry)) {
+          accounts!.push(entry);
+        } else {
+          invalidEntries.push({ index: idx, value: entry });
+        }
+      });
+
+      if (invalidEntries.length === 0) {
+        results.push({
+          id: "sep1.accounts",
+          description: "ACCOUNTS entries are valid Stellar ed25519 public keys",
+          status: "pass",
+          severity: "error",
+          message: `All ${raw.ACCOUNTS.length} ACCOUNTS are valid Stellar ed25519 public keys`,
+        });
+      } else {
+        const errorDetails = invalidEntries
+          .map((i) => `index ${i.index}: "${String(i.value)}"`)
+          .join(", ");
+        results.push({
+          id: "sep1.accounts",
+          description: "ACCOUNTS entries are valid Stellar ed25519 public keys",
+          status: "fail",
+          severity: "error",
+          message: `ACCOUNTS contains invalid Stellar ed25519 public key(s) at ${errorDetails}`,
+        });
+      }
+    } else {
+      results.push({
+        id: "sep1.accounts",
+        description: "ACCOUNTS entries are valid Stellar ed25519 public keys",
+        status: "fail",
+        severity: "error",
+        message: `ACCOUNTS must be an array of public key strings, got ${typeof raw.ACCOUNTS}`,
+      });
+    }
+  }
+
   return {
     toml: {
       raw,
@@ -293,6 +359,7 @@ export function parseStellarToml(
       transferServerSep24,
       directPaymentServer,
       jwksUri,
+      accounts,
     },
     results,
   };

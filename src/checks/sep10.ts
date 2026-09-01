@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { Keypair, Networks, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Keypair, Networks, StrKey, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -71,6 +71,17 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
 
   const webAuthEndpoint = toml.webAuthEndpoint;
   const signingKey = toml.signingKey;
+
+  if (!StrKey.isValidEd25519PublicKey(signingKey)) {
+    results.push({
+      id: "sep10.skipped",
+      description: "Run SEP-10 challenge/response flow",
+      status: "warn",
+      severity: "error",
+      message: `Skipped: SIGNING_KEY "${signingKey}" is not a valid Stellar ed25519 public key`,
+    });
+    return results;
+  }
   let webAuthDomain: string;
   try {
     webAuthDomain = new URL(webAuthEndpoint).host;
