@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Keypair, Networks, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import * as jose from "jose";
 import { runSep10Checks } from "../src/checks/sep10.js";
 import type { StellarToml } from "../src/checks/sep1.js";
 
@@ -12,8 +13,9 @@ function fakeJwt(
   sub: string,
   expiresInSeconds = 3600,
   extraClaims: Record<string, unknown> = {},
+  alg = "EdDSA",
 ): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString(
+  const header = Buffer.from(JSON.stringify({ alg, typ: "JWT" })).toString(
     "base64url",
   );
   const payload = Buffer.from(
@@ -23,7 +25,7 @@ function fakeJwt(
       ...extraClaims,
     }),
   ).toString("base64url");
-  return `${header}.${payload}.`;
+  return `${header}.${payload}.fakesig`;
 }
 
 describe("runSep10Checks", () => {
@@ -174,7 +176,7 @@ describe("runSep10Checks", () => {
         } as Response;
       }
 
-      const header = Buffer.from(JSON.stringify({ alg: "none" })).toString(
+      const header = Buffer.from(JSON.stringify({ alg: "EdDSA" })).toString(
         "base64url",
       );
       const payload = Buffer.from(JSON.stringify({ sub: capturedAccount })).toString(
@@ -183,7 +185,7 @@ describe("runSep10Checks", () => {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ token: `${header}.${payload}.` }),
+        json: async () => ({ token: `${header}.${payload}.fakesig` }),
       } as Response;
     }) as unknown as typeof fetch;
 
@@ -199,8 +201,13 @@ describe("runSep10Checks", () => {
     let capturedClientDomain = "";
 
     global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input.toString();
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+
       if (!init || init.method === undefined) {
-        const url = new URL(_input as string);
+        const url = new URL(urlStr);
         capturedAccount = url.searchParams.get("account")!;
         capturedClientDomain = url.searchParams.get("client_domain")!;
 
@@ -376,5 +383,235 @@ describe("runSep10Checks", () => {
     const tbCheck = results.find((r) => r.id === "sep10.challenge_timebounds_reasonable");
     expect(tbCheck?.status).toBe("fail");
     expect(tbCheck?.message).toContain("exceeds maximum recommended 900s");
+  });
+
+  it("verifies JWT signature when anchor provides a valid JWKS endpoint", async () => {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const jwk = await jose.exportJWK(publicKey);
+    jwk.kid = "test-kid-1";
+    jwk.alg = "ES256";
+    const jwks = { keys: [jwk] };
+
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const urlStr = input.toString();
+
+      if (urlStr === "https://example.com/jwks.json") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => jwks,
+        } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        const url = new URL(urlStr);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      const signedJwt = await new jose.SignJWT({ sub: capturedAccount })
+        .setProtectedHeader({ alg: "ES256", kid: "test-kid-1" })
+        .setExpirationTime("1h")
+        .sign(privateKey);
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: signedJwt }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const tomlWithJwks: StellarToml = {
+      ...toml,
+      jwksUri: "https://example.com/jwks.json",
+    };
+
+    const results = await runSep10Checks({
+      domain,
+      toml: tomlWithJwks,
+      network: "testnet",
+    });
+
+    const sigCheck = results.find((r) => r.id === "sep10.jwt_signature");
+    expect(sigCheck?.status).toBe("pass");
+    expect(sigCheck?.message).toContain("verified successfully");
+  });
+
+  it("fails JWT signature verification when token payload is tampered", async () => {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const jwk = await jose.exportJWK(publicKey);
+    jwk.kid = "test-kid-1";
+    jwk.alg = "ES256";
+    const jwks = { keys: [jwk] };
+
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const urlStr = input.toString();
+
+      if (urlStr === "https://example.com/jwks.json") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => jwks,
+        } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        const url = new URL(urlStr);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      const validJwt = await new jose.SignJWT({ sub: capturedAccount })
+        .setProtectedHeader({ alg: "ES256", kid: "test-kid-1" })
+        .setExpirationTime("1h")
+        .sign(privateKey);
+
+      // Tamper with the payload while keeping the original signature
+      const parts = validJwt.split(".");
+      const tamperedPayload = Buffer.from(
+        JSON.stringify({ sub: "GTAMPEREDACCOUNT", exp: Math.floor(Date.now() / 1000) + 3600 }),
+      ).toString("base64url");
+      const tamperedJwt = `${parts[0]}.${tamperedPayload}.${parts[2]}`;
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: tamperedJwt }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const tomlWithJwks: StellarToml = {
+      ...toml,
+      jwksUri: "https://example.com/jwks.json",
+    };
+
+    const results = await runSep10Checks({
+      domain,
+      toml: tomlWithJwks,
+      network: "testnet",
+    });
+
+    const sigCheck = results.find((r) => r.id === "sep10.jwt_signature");
+    expect(sigCheck?.status).toBe("fail");
+    expect(sigCheck?.message).toContain("verification failed");
+  });
+
+  it("fails when JWT algorithm is 'none'", async () => {
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (_input, init) => {
+      if (!init || init.method === undefined) {
+        const url = new URL(_input as string);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(capturedAccount, 3600, {}, "none") }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const algCheck = results.find((r) => r.id === "sep10.jwt_algorithm");
+    const sigCheck = results.find((r) => r.id === "sep10.jwt_signature");
+
+    expect(algCheck?.status).toBe("fail");
+    expect(algCheck?.message).toContain('unsigned tokens are rejected');
+    expect(sigCheck?.status).toBe("fail");
+  });
+
+  it("warns when no JWKS endpoint is discoverable", async () => {
+    let capturedAccount = "";
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const urlStr = input.toString();
+
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return {
+          ok: false,
+          status: 404,
+        } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        const url = new URL(urlStr);
+        capturedAccount = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          capturedAccount,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(capturedAccount) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({ domain, toml, network: "testnet" });
+    const sigCheck = results.find((r) => r.id === "sep10.jwt_signature");
+
+    expect(sigCheck?.status).toBe("warn");
+    expect(sigCheck?.message).toContain("no JWKS endpoint declared");
   });
 });
