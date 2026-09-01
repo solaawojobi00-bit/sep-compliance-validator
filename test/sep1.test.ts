@@ -454,5 +454,159 @@ SIGNING_KEY = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
   });
 });
 
+describe("SEP-1 [DOCUMENTATION] ORG_* validation", () => {
+  const validKey = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7";
+
+  it("extracts and passes conformant DOCUMENTATION section", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_NAME = "My Anchor"
+ORG_URL = "https://anchor.example.com"
+ORG_LOGO = "https://anchor.example.com/logo.png"
+ORG_OFFICIAL_EMAIL = "contact@anchor.example.com"
+ORG_SUPPORT_EMAIL = "support@anchor.example.com"
+ORG_PHONE_NUMBER = "+14155552671"
+ORG_PHYSICAL_ADDRESS_ATTESTATION = "https://anchor.example.com/attestation/address.pdf"
+ORG_PHONE_NUMBER_ATTESTATION = "https://anchor.example.com/attestation/phone.pdf"
+`;
+
+    const { toml, results } = parseStellarToml(rawToml, "testnet", "anchor.example.com");
+    expect(toml.documentation).toBeDefined();
+    expect(toml.documentation?.orgName).toBe("My Anchor");
+    expect(toml.documentation?.orgUrl).toBe("https://anchor.example.com");
+
+    const docChecks = results.filter((r) => r.id.startsWith("sep1.doc"));
+    expect(docChecks.length).toBeGreaterThan(0);
+    expect(docChecks.every((r) => r.status === "pass")).toBe(true);
+    expect(docChecks.every((r) => r.severity === "warning")).toBe(true);
+  });
+
+  it("remains silent when [DOCUMENTATION] is absent", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+`;
+    const { toml, results } = parseStellarToml(rawToml);
+    expect(toml.documentation).toBeUndefined();
+    expect(results.some((r) => r.id.startsWith("sep1.doc"))).toBe(false);
+  });
+
+  it("warns when ORG_URL host does not match hosting domain", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_URL = "https://otherdomain.com"
+`;
+    const { results } = parseStellarToml(rawToml, "testnet", "myanchor.com");
+    const check = results.find((r) => r.id === "sep1.doc.org_url");
+    expect(check?.status).toBe("warn");
+    expect(check?.severity).toBe("warning");
+    expect(check?.message).toContain('does not match hosting domain "myanchor.com"');
+  });
+
+  it("warns when ORG_OFFICIAL_EMAIL is not well-formed or not on ORG_URL domain", () => {
+    const tomlMalformed = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_URL = "https://anchor.example.com"
+ORG_OFFICIAL_EMAIL = "not-an-email"
+`;
+    const { results: resMalformed } = parseStellarToml(tomlMalformed);
+    const checkMalformed = resMalformed.find((r) => r.id === "sep1.doc.org_official_email");
+    expect(checkMalformed?.status).toBe("warn");
+    expect(checkMalformed?.severity).toBe("warning");
+
+    const tomlWrongDomain = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_URL = "https://anchor.example.com"
+ORG_OFFICIAL_EMAIL = "contact@gmail.com"
+`;
+    const { results: resWrongDomain } = parseStellarToml(tomlWrongDomain);
+    const checkWrongDomain = resWrongDomain.find((r) => r.id === "sep1.doc.org_official_email");
+    expect(checkWrongDomain?.status).toBe("warn");
+    expect(checkWrongDomain?.severity).toBe("warning");
+    expect(checkWrongDomain?.message).toContain("does not match ORG_URL domain");
+  });
+
+  it("warns when attestation URLs are not on ORG_URL domain", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_URL = "https://anchor.example.com"
+ORG_PHYSICAL_ADDRESS_ATTESTATION = "https://thirdparty.com/attestation.pdf"
+ORG_PHONE_NUMBER_ATTESTATION = "http://insecure.example.com/phone.pdf"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const addrCheck = results.find((r) => r.id === "sep1.doc.org_physical_address_attestation");
+    const phoneCheck = results.find((r) => r.id === "sep1.doc.org_phone_number_attestation");
+
+    expect(addrCheck?.status).toBe("warn");
+    expect(addrCheck?.severity).toBe("warning");
+    expect(addrCheck?.message).toContain("is not on the ORG_URL domain");
+
+    expect(phoneCheck?.status).toBe("warn");
+    expect(phoneCheck?.severity).toBe("warning");
+    expect(phoneCheck?.message).toContain("must use the https: scheme");
+  });
+
+  it("warns when ORG_PHONE_NUMBER is not in E.164 format", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_PHONE_NUMBER = "1-415-555-2671"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const check = results.find((r) => r.id === "sep1.doc.org_phone_number");
+    expect(check?.status).toBe("warn");
+    expect(check?.severity).toBe("warning");
+    expect(check?.message).toContain("must be in E.164 format");
+  });
+
+  it("warns when ORG_LOGO is not a valid HTTPS URL", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_LOGO = "http://insecure.example.com/logo.png"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const check = results.find((r) => r.id === "sep1.doc.org_logo");
+    expect(check?.status).toBe("warn");
+    expect(check?.severity).toBe("warning");
+    expect(check?.message).toContain("must use the https: scheme");
+  });
+
+  it("warns when ORG_SUPPORT_EMAIL is malformed", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validKey}"
+
+[DOCUMENTATION]
+ORG_SUPPORT_EMAIL = "invalid-support-email"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const check = results.find((r) => r.id === "sep1.doc.org_support_email");
+    expect(check?.status).toBe("warn");
+    expect(check?.severity).toBe("warning");
+    expect(check?.message).toContain("is not a valid email address");
+  });
+});
+
+
 
 
