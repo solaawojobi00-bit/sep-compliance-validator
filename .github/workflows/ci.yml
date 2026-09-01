@@ -31,3 +31,11 @@ jobs:
       
     - name: Run tests
       run: npm test
+
+    - name: Smoke test composite GitHub Action
+      if: matrix.node-version == '22.x'
+      uses: ./
+      continue-on-error: true
+      with:
+        domain: testanchor.stellar.org
+        network: testnet
