@@ -12,6 +12,9 @@ describe("package entrypoint exports (src/index.ts)", () => {
     expect(index.validateCurrencies).toBeDefined();
     expect(typeof index.validateCurrencies).toBe("function");
 
+    expect(index.validateDocumentation).toBeDefined();
+    expect(typeof index.validateDocumentation).toBe("function");
+
     expect(index.runSep10Checks).toBeDefined();
     expect(typeof index.runSep10Checks).toBe("function");
 

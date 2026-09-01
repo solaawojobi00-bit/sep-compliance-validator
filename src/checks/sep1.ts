@@ -8,6 +8,27 @@ import { validateCurrencies, type Currency } from "./sep1-currencies.js";
 export type { Currency };
 export { validateCurrencies };
 
+export interface Documentation {
+  orgName?: string;
+  orgDBA?: string;
+  orgUrl?: string;
+  orgLogo?: string;
+  orgDescription?: string;
+  orgPhysicalAddress?: string;
+  orgPhysicalAddressAttestation?: string;
+  orgPhoneNumber?: string;
+  orgPhoneNumberAttestation?: string;
+  orgKeybase?: string;
+  orgTwitter?: string;
+  orgGithub?: string;
+  orgOfficialEmail?: string;
+  orgSupportEmail?: string;
+  orgLicensingAuthority?: string;
+  orgLicenseType?: string;
+  orgLicenseNumber?: string;
+  [key: string]: unknown;
+}
+
 export interface StellarToml {
   raw: Record<string, unknown>;
   version?: string;
@@ -22,6 +43,7 @@ export interface StellarToml {
   jwksUri?: string;
   accounts?: string[];
   currencies?: Currency[];
+  documentation?: Documentation;
 }
 
 export function validateHttpsUrl(
@@ -198,7 +220,7 @@ export async function fetchStellarToml(
     return { toml: { raw: {} }, results };
   }
 
-  const parsed = parseStellarToml(text, network);
+  const parsed = parseStellarToml(text, network, domain);
   results.push(...parsed.results);
   return { toml: parsed.toml, results };
 }
@@ -206,6 +228,7 @@ export async function fetchStellarToml(
 export function parseStellarToml(
   text: string,
   network: "testnet" | "mainnet" = "testnet",
+  domain?: string,
 ): {
   toml: StellarToml;
   results: CheckResult[];
@@ -465,6 +488,9 @@ export function parseStellarToml(
   // Extract and validate [[CURRENCIES]] if declared
   const currencies = validateCurrencies(raw.CURRENCIES, results);
 
+  // Extract and validate [DOCUMENTATION] if declared
+  const documentation = validateDocumentation(raw.DOCUMENTATION, domain, results);
+
   return {
     toml: {
       raw,
@@ -480,7 +506,335 @@ export function parseStellarToml(
       jwksUri,
       accounts,
       currencies,
+      documentation,
     },
     results,
   };
+}
+
+export function validateDocumentation(
+  rawDoc: unknown,
+  domain: string | undefined,
+  results: CheckResult[],
+): Documentation | undefined {
+  if (rawDoc === undefined || rawDoc === null) {
+    return undefined;
+  }
+
+  if (typeof rawDoc !== "object" || Array.isArray(rawDoc)) {
+    results.push({
+      id: "sep1.doc",
+      description: "[DOCUMENTATION] section format",
+      status: "warn",
+      severity: "warning",
+      message: `DOCUMENTATION must be a table, got ${typeof rawDoc}`,
+    });
+    return undefined;
+  }
+
+  const doc = rawDoc as Record<string, unknown>;
+  const documentation: Documentation = {
+    orgName: typeof doc.ORG_NAME === "string" ? doc.ORG_NAME : undefined,
+    orgDBA: typeof doc.ORG_DBA === "string" ? doc.ORG_DBA : undefined,
+    orgUrl: typeof doc.ORG_URL === "string" ? doc.ORG_URL : undefined,
+    orgLogo: typeof doc.ORG_LOGO === "string" ? doc.ORG_LOGO : undefined,
+    orgDescription:
+      typeof doc.ORG_DESCRIPTION === "string" ? doc.ORG_DESCRIPTION : undefined,
+    orgPhysicalAddress:
+      typeof doc.ORG_PHYSICAL_ADDRESS === "string" ? doc.ORG_PHYSICAL_ADDRESS : undefined,
+    orgPhysicalAddressAttestation:
+      typeof doc.ORG_PHYSICAL_ADDRESS_ATTESTATION === "string"
+        ? doc.ORG_PHYSICAL_ADDRESS_ATTESTATION
+        : undefined,
+    orgPhoneNumber:
+      typeof doc.ORG_PHONE_NUMBER === "string" ? doc.ORG_PHONE_NUMBER : undefined,
+    orgPhoneNumberAttestation:
+      typeof doc.ORG_PHONE_NUMBER_ATTESTATION === "string"
+        ? doc.ORG_PHONE_NUMBER_ATTESTATION
+        : undefined,
+    orgKeybase: typeof doc.ORG_KEYBASE === "string" ? doc.ORG_KEYBASE : undefined,
+    orgTwitter: typeof doc.ORG_TWITTER === "string" ? doc.ORG_TWITTER : undefined,
+    orgGithub: typeof doc.ORG_GITHUB === "string" ? doc.ORG_GITHUB : undefined,
+    orgOfficialEmail:
+      typeof doc.ORG_OFFICIAL_EMAIL === "string" ? doc.ORG_OFFICIAL_EMAIL : undefined,
+    orgSupportEmail:
+      typeof doc.ORG_SUPPORT_EMAIL === "string" ? doc.ORG_SUPPORT_EMAIL : undefined,
+    orgLicensingAuthority:
+      typeof doc.ORG_LICENSING_AUTHORITY === "string"
+        ? doc.ORG_LICENSING_AUTHORITY
+        : undefined,
+    orgLicenseType:
+      typeof doc.ORG_LICENSE_TYPE === "string" ? doc.ORG_LICENSE_TYPE : undefined,
+    orgLicenseNumber:
+      typeof doc.ORG_LICENSE_NUMBER === "string" ? doc.ORG_LICENSE_NUMBER : undefined,
+    ...doc,
+  };
+
+  let orgHost: string | undefined;
+
+  // 1. ORG_URL: HTTPS URL; must be the domain hosting this stellar.toml
+  if (doc.ORG_URL !== undefined) {
+    if (typeof doc.ORG_URL !== "string") {
+      results.push({
+        id: "sep1.doc.org_url",
+        description: "ORG_URL must be a valid HTTPS URL",
+        status: "warn",
+        severity: "warning",
+        message: `ORG_URL must be a string URL, got ${typeof doc.ORG_URL}`,
+      });
+    } else {
+      try {
+        const u = new URL(doc.ORG_URL);
+        if (u.protocol !== "https:") {
+          results.push({
+            id: "sep1.doc.org_url",
+            description: "ORG_URL must use the https: scheme",
+            status: "warn",
+            severity: "warning",
+            message: `ORG_URL "${doc.ORG_URL}" must use the https: scheme`,
+          });
+        } else {
+          orgHost = u.host.toLowerCase();
+          if (
+            domain &&
+            orgHost !== domain.toLowerCase() &&
+            !orgHost.endsWith("." + domain.toLowerCase()) &&
+            !domain.toLowerCase().endsWith("." + orgHost)
+          ) {
+            results.push({
+              id: "sep1.doc.org_url",
+              description: "ORG_URL matches hosting domain",
+              status: "warn",
+              severity: "warning",
+              message: `ORG_URL host "${orgHost}" does not match hosting domain "${domain}"`,
+            });
+          } else {
+            results.push({
+              id: "sep1.doc.org_url",
+              description: "ORG_URL is valid HTTPS URL matching domain",
+              status: "pass",
+              severity: "warning",
+              message: `ORG_URL is a valid HTTPS URL: ${doc.ORG_URL}`,
+            });
+          }
+        }
+      } catch {
+        results.push({
+          id: "sep1.doc.org_url",
+          description: "ORG_URL must be a valid absolute HTTPS URL",
+          status: "warn",
+          severity: "warning",
+          message: `ORG_URL "${doc.ORG_URL}" is not a valid absolute URL`,
+        });
+      }
+    }
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // 2. ORG_OFFICIAL_EMAIL: must use the ORG_URL domain
+  if (doc.ORG_OFFICIAL_EMAIL !== undefined) {
+    if (
+      typeof doc.ORG_OFFICIAL_EMAIL !== "string" ||
+      !emailRegex.test(doc.ORG_OFFICIAL_EMAIL)
+    ) {
+      results.push({
+        id: "sep1.doc.org_official_email",
+        description: "ORG_OFFICIAL_EMAIL format and domain",
+        status: "warn",
+        severity: "warning",
+        message: `ORG_OFFICIAL_EMAIL "${String(doc.ORG_OFFICIAL_EMAIL)}" is not a well-formed email address`,
+      });
+    } else {
+      const emailDomain = doc.ORG_OFFICIAL_EMAIL.split("@")[1].toLowerCase();
+      const targetDomain = orgHost ?? (domain ? domain.toLowerCase() : undefined);
+      if (
+        targetDomain &&
+        emailDomain !== targetDomain &&
+        !emailDomain.endsWith("." + targetDomain) &&
+        !targetDomain.endsWith("." + emailDomain)
+      ) {
+        results.push({
+          id: "sep1.doc.org_official_email",
+          description: "ORG_OFFICIAL_EMAIL format and domain",
+          status: "warn",
+          severity: "warning",
+          message: `ORG_OFFICIAL_EMAIL domain "${emailDomain}" does not match ORG_URL domain "${targetDomain}"`,
+        });
+      } else {
+        results.push({
+          id: "sep1.doc.org_official_email",
+          description: "ORG_OFFICIAL_EMAIL format and domain",
+          status: "pass",
+          severity: "warning",
+          message: `ORG_OFFICIAL_EMAIL is valid: ${doc.ORG_OFFICIAL_EMAIL}`,
+        });
+      }
+    }
+  }
+
+  // 3. ORG_PHYSICAL_ADDRESS_ATTESTATION & ORG_PHONE_NUMBER_ATTESTATION: HTTPS on ORG_URL domain
+  const attestationFields = [
+    {
+      key: "ORG_PHYSICAL_ADDRESS_ATTESTATION",
+      id: "sep1.doc.org_physical_address_attestation",
+    },
+    {
+      key: "ORG_PHONE_NUMBER_ATTESTATION",
+      id: "sep1.doc.org_phone_number_attestation",
+    },
+  ] as const;
+
+  for (const { key, id } of attestationFields) {
+    const val = doc[key];
+    if (val !== undefined) {
+      if (typeof val !== "string") {
+        results.push({
+          id,
+          description: `${key} HTTPS URL on ORG_URL domain`,
+          status: "warn",
+          severity: "warning",
+          message: `${key} must be a string URL, got ${typeof val}`,
+        });
+      } else {
+        try {
+          const u = new URL(val);
+          if (u.protocol !== "https:") {
+            results.push({
+              id,
+              description: `${key} HTTPS URL on ORG_URL domain`,
+              status: "warn",
+              severity: "warning",
+              message: `${key} "${val}" must use the https: scheme`,
+            });
+          } else {
+            const host = u.host.toLowerCase();
+            const targetDomain = orgHost ?? (domain ? domain.toLowerCase() : undefined);
+            if (
+              targetDomain &&
+              host !== targetDomain &&
+              !host.endsWith("." + targetDomain)
+            ) {
+              results.push({
+                id,
+                description: `${key} HTTPS URL on ORG_URL domain`,
+                status: "warn",
+                severity: "warning",
+                message: `${key} host "${host}" is not on the ORG_URL domain "${targetDomain}"`,
+              });
+            } else {
+              results.push({
+                id,
+                description: `${key} HTTPS URL on ORG_URL domain`,
+                status: "pass",
+                severity: "warning",
+                message: `${key} is valid on domain: ${val}`,
+              });
+            }
+          }
+        } catch {
+          results.push({
+            id,
+            description: `${key} HTTPS URL on ORG_URL domain`,
+            status: "warn",
+            severity: "warning",
+            message: `${key} "${val}" is not a valid absolute URL`,
+          });
+        }
+      }
+    }
+  }
+
+  // 4. ORG_PHONE_NUMBER: E.164 format (^\+[1-9]\d{1,14}$)
+  if (doc.ORG_PHONE_NUMBER !== undefined) {
+    const e164Regex = /^\+[1-9]\d{1,14}$/;
+    if (
+      typeof doc.ORG_PHONE_NUMBER !== "string" ||
+      !e164Regex.test(doc.ORG_PHONE_NUMBER)
+    ) {
+      results.push({
+        id: "sep1.doc.org_phone_number",
+        description: "ORG_PHONE_NUMBER E.164 format",
+        status: "warn",
+        severity: "warning",
+        message: `ORG_PHONE_NUMBER "${String(doc.ORG_PHONE_NUMBER)}" must be in E.164 format (e.g. +14155552671)`,
+      });
+    } else {
+      results.push({
+        id: "sep1.doc.org_phone_number",
+        description: "ORG_PHONE_NUMBER E.164 format",
+        status: "pass",
+        severity: "warning",
+        message: `ORG_PHONE_NUMBER is valid E.164: ${doc.ORG_PHONE_NUMBER}`,
+      });
+    }
+  }
+
+  // 5. ORG_LOGO: parseable HTTPS URL (offline)
+  if (doc.ORG_LOGO !== undefined) {
+    if (typeof doc.ORG_LOGO !== "string") {
+      results.push({
+        id: "sep1.doc.org_logo",
+        description: "ORG_LOGO HTTPS URL",
+        status: "warn",
+        severity: "warning",
+        message: `ORG_LOGO must be a string URL, got ${typeof doc.ORG_LOGO}`,
+      });
+    } else {
+      try {
+        const u = new URL(doc.ORG_LOGO);
+        if (u.protocol !== "https:") {
+          results.push({
+            id: "sep1.doc.org_logo",
+            description: "ORG_LOGO HTTPS URL",
+            status: "warn",
+            severity: "warning",
+            message: `ORG_LOGO "${doc.ORG_LOGO}" must use the https: scheme`,
+          });
+        } else {
+          results.push({
+            id: "sep1.doc.org_logo",
+            description: "ORG_LOGO HTTPS URL",
+            status: "pass",
+            severity: "warning",
+            message: `ORG_LOGO is a valid HTTPS URL: ${doc.ORG_LOGO}`,
+          });
+        }
+      } catch {
+        results.push({
+          id: "sep1.doc.org_logo",
+          description: "ORG_LOGO HTTPS URL",
+          status: "warn",
+          severity: "warning",
+          message: `ORG_LOGO "${doc.ORG_LOGO}" is not a valid absolute URL`,
+        });
+      }
+    }
+  }
+
+  // 6. ORG_SUPPORT_EMAIL: well-formed email
+  if (doc.ORG_SUPPORT_EMAIL !== undefined) {
+    if (
+      typeof doc.ORG_SUPPORT_EMAIL !== "string" ||
+      !emailRegex.test(doc.ORG_SUPPORT_EMAIL)
+    ) {
+      results.push({
+        id: "sep1.doc.org_support_email",
+        description: "ORG_SUPPORT_EMAIL format",
+        status: "warn",
+        severity: "warning",
+        message: `ORG_SUPPORT_EMAIL "${String(doc.ORG_SUPPORT_EMAIL)}" is not a valid email address`,
+      });
+    } else {
+      results.push({
+        id: "sep1.doc.org_support_email",
+        description: "ORG_SUPPORT_EMAIL format",
+        status: "pass",
+        severity: "warning",
+        message: `ORG_SUPPORT_EMAIL is valid: ${doc.ORG_SUPPORT_EMAIL}`,
+      });
+    }
+  }
+
+  return documentation;
 }
