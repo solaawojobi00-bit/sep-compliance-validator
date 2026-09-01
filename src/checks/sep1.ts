@@ -11,7 +11,64 @@ export interface StellarToml {
   kycServer?: string;
   transferServer?: string;
   transferServerSep24?: string;
+  directPaymentServer?: string;
   jwksUri?: string;
+}
+
+export function validateHttpsUrl(
+  fieldName: string,
+  value: unknown,
+  results: CheckResult[],
+): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const checkId = `sep1.url.${fieldName.toLowerCase()}`;
+  const description = `${fieldName} must be a valid absolute HTTPS URL`;
+
+  if (typeof value !== "string" || value.trim() === "") {
+    results.push({
+      id: checkId,
+      description,
+      status: "fail",
+      severity: "error",
+      message: `${fieldName} must be a non-empty string URL, got ${typeof value}`,
+    });
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") {
+      results.push({
+        id: checkId,
+        description,
+        status: "fail",
+        severity: "error",
+        message: `${fieldName} URL "${value}" must use the https: scheme (got ${parsed.protocol})`,
+      });
+      return undefined;
+    }
+
+    results.push({
+      id: checkId,
+      description,
+      status: "pass",
+      severity: "error",
+      message: `${fieldName} is a valid HTTPS URL: ${value}`,
+    });
+    return value;
+  } catch {
+    results.push({
+      id: checkId,
+      description,
+      status: "fail",
+      severity: "error",
+      message: `${fieldName} "${value}" is not a valid absolute URL`,
+    });
+    return undefined;
+  }
 }
 
 export async function fetchStellarToml(
@@ -86,44 +143,33 @@ export function parseStellarToml(text: string): {
     message: "stellar.toml parsed successfully",
   });
 
-  let validWebAuthUrl: string | undefined;
-  if (typeof raw.WEB_AUTH_ENDPOINT === "string") {
-    try {
-      const parsed = new URL(raw.WEB_AUTH_ENDPOINT);
-      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
-        validWebAuthUrl = raw.WEB_AUTH_ENDPOINT;
-      }
-    } catch {
-      // Invalid URL
-    }
-  }
+  // Validate WEB_AUTH_ENDPOINT
+  const webAuthEndpoint = validateHttpsUrl(
+    "WEB_AUTH_ENDPOINT",
+    raw.WEB_AUTH_ENDPOINT,
+    results,
+  );
 
-  if (validWebAuthUrl) {
-    results.push({
-      id: "sep1.web_auth_endpoint",
-      description: "stellar.toml declares WEB_AUTH_ENDPOINT",
-      status: "pass",
-      severity: "error",
-      message: `WEB_AUTH_ENDPOINT = ${validWebAuthUrl}`,
-    });
-  } else if (raw.WEB_AUTH_ENDPOINT !== undefined) {
-    results.push({
-      id: "sep1.web_auth_endpoint",
-      description: "stellar.toml declares WEB_AUTH_ENDPOINT",
-      status: "fail",
-      severity: "error",
-      message: `WEB_AUTH_ENDPOINT "${raw.WEB_AUTH_ENDPOINT}" is not a valid absolute URL`,
-    });
-  } else {
-    results.push({
-      id: "sep1.web_auth_endpoint",
-      description: "stellar.toml declares WEB_AUTH_ENDPOINT",
-      status: "fail",
-      severity: "error",
-      message:
-        "WEB_AUTH_ENDPOINT is missing or not a string; SEP-10 checks cannot run",
-    });
-  }
+  results.push(
+    webAuthEndpoint
+      ? {
+          id: "sep1.web_auth_endpoint",
+          description: "stellar.toml declares WEB_AUTH_ENDPOINT",
+          status: "pass",
+          severity: "error",
+          message: `WEB_AUTH_ENDPOINT = ${webAuthEndpoint}`,
+        }
+      : {
+          id: "sep1.web_auth_endpoint",
+          description: "stellar.toml declares WEB_AUTH_ENDPOINT",
+          status: "fail",
+          severity: "error",
+          message:
+            raw.WEB_AUTH_ENDPOINT !== undefined
+              ? `WEB_AUTH_ENDPOINT "${raw.WEB_AUTH_ENDPOINT}" is not a valid absolute URL`
+              : "WEB_AUTH_ENDPOINT is missing or not a string; SEP-10 checks cannot run",
+        },
+  );
 
   const signingKey =
     typeof raw.SIGNING_KEY === "string" ? raw.SIGNING_KEY : undefined;
@@ -166,39 +212,57 @@ export function parseStellarToml(text: string): {
         },
   );
 
-  const anchorQuoteServer =
-    typeof raw.ANCHOR_QUOTE_SERVER === "string" ? raw.ANCHOR_QUOTE_SERVER : undefined;
+  // Validate optional service endpoints (silent when absent)
+  const anchorQuoteServer = validateHttpsUrl(
+    "ANCHOR_QUOTE_SERVER",
+    raw.ANCHOR_QUOTE_SERVER,
+    results,
+  );
 
-  const kycServer =
-    typeof raw.KYC_SERVER === "string" ? raw.KYC_SERVER : undefined;
+  const kycServer = validateHttpsUrl(
+    "KYC_SERVER",
+    raw.KYC_SERVER,
+    results,
+  );
 
-  const transferServer =
-    typeof raw.TRANSFER_SERVER === "string" ? raw.TRANSFER_SERVER : undefined;
+  const transferServer = validateHttpsUrl(
+    "TRANSFER_SERVER",
+    raw.TRANSFER_SERVER,
+    results,
+  );
 
-  const transferServerSep24 =
-    typeof raw.TRANSFER_SERVER_SEP0024 === "string"
-      ? raw.TRANSFER_SERVER_SEP0024
-      : undefined;
+  const transferServerSep24 = validateHttpsUrl(
+    "TRANSFER_SERVER_SEP0024",
+    raw.TRANSFER_SERVER_SEP0024,
+    results,
+  );
 
-  const jwksUri =
-    typeof raw.JWKS_URI === "string"
-      ? raw.JWKS_URI
-      : typeof raw.JWKS_ENDPOINT === "string"
-        ? raw.JWKS_ENDPOINT
-        : typeof raw.JWKS === "string"
-          ? raw.JWKS
-          : undefined;
+  const directPaymentServer = validateHttpsUrl(
+    "DIRECT_PAYMENT_SERVER",
+    raw.DIRECT_PAYMENT_SERVER,
+    results,
+  );
+
+  let jwksUri: string | undefined;
+  if (raw.JWKS_URI !== undefined) {
+    jwksUri = validateHttpsUrl("JWKS_URI", raw.JWKS_URI, results);
+  } else if (raw.JWKS_ENDPOINT !== undefined) {
+    jwksUri = validateHttpsUrl("JWKS_ENDPOINT", raw.JWKS_ENDPOINT, results);
+  } else if (raw.JWKS !== undefined) {
+    jwksUri = validateHttpsUrl("JWKS", raw.JWKS, results);
+  }
 
   return {
     toml: {
       raw,
-      webAuthEndpoint: validWebAuthUrl,
+      webAuthEndpoint,
       signingKey,
       networkPassphrase,
       anchorQuoteServer,
       kycServer,
       transferServer,
       transferServerSep24,
+      directPaymentServer,
       jwksUri,
     },
     results,
