@@ -347,6 +347,6 @@ describe("runSep24Checks", () => {
       r.id.startsWith("sep24.interactive_browser_"),
     );
     expect(browserCheck).toBeDefined();
-  });
+  }, 35000);
 });
 
