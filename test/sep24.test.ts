@@ -301,5 +301,52 @@ describe("runSep24Checks", () => {
     expect(infoCheck?.status).toBe("fail");
     expect(infoCheck?.message).toContain("timed out after 25ms");
   });
+
+  it("runs browser checks dynamically on demand when interactiveBrowser is true", async () => {
+    const transactionId = "tx_sep24_browser_dynamic";
+    const interactiveUrl = "https://interactive.example.com/deposit?id=" + transactionId;
+
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url === "https://transfer.example.com/sep24/info") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ deposit: { USDC: { enabled: true } }, withdraw: {} }),
+        } as Response;
+      }
+      if (url === "https://transfer.example.com/sep24/transactions/deposit/interactive") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ type: "interactive_customer_info_needed", url: interactiveUrl, id: transactionId }),
+        } as Response;
+      }
+      if (url === interactiveUrl) {
+        return { ok: true, status: 200, text: async () => "<html>Interactive form</html>" } as Response;
+      }
+      if (url === `https://transfer.example.com/sep24/transaction?id=${transactionId}`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ transaction: { id: transactionId, status: "incomplete", kind: "deposit" } }),
+        } as Response;
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep24Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+      interactiveBrowser: true,
+    });
+
+    const browserCheck = results.find((r) =>
+      r.id.startsWith("sep24.interactive_browser_"),
+    );
+    expect(browserCheck).toBeDefined();
+  });
 });
 
