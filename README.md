@@ -45,7 +45,7 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 - `-f, --format <table|json|html>`: Output format (default: `table`).
 - `--client-domain <domain>`: Client domain to exercise SEP-10 `client_domain` verification.
 - `-t, --timeout <ms>`: Request timeout in milliseconds (default: `10000`).
-- `--interactive-browser`: Run headless browser automation (Playwright) against SEP-24 interactive URL to validate forms and completion callbacks.
+- `--interactive-browser`: Run headless browser automation (Playwright) against SEP-24 interactive URL to validate forms and completion callbacks. Requires Playwright (`npm install playwright && npx playwright install chromium`).
 - `--memo <id>`: Numeric ID memo for SEP-10 challenge authentication to validate custodial wallet flows.
 - `--muxed`: Authenticate using a muxed (`M...`) account for SEP-10.
 

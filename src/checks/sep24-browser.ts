@@ -1,4 +1,4 @@
-import { chromium, Browser, Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import type { CheckResult } from "../core/report.js";
 
 export interface Sep24BrowserOptions {
@@ -27,23 +27,49 @@ export async function runSep24BrowserChecks(
     if (opts.browserLauncher) {
       browser = await opts.browserLauncher();
     } else {
+      let playwrightModule: any;
+      try {
+        playwrightModule = await import("playwright");
+      } catch {
+        results.push({
+          id: "sep24.interactive_browser_launch",
+          description: "Launch headless browser and navigate to interactive URL",
+          status: "warn",
+          severity: "warning",
+          message:
+            'Browser launch skipped: optional dependency "playwright" is not installed. Run "npm install playwright && npx playwright install chromium" to enable.',
+        });
+        return { results };
+      }
+      const chromium =
+        playwrightModule.chromium ?? playwrightModule.default?.chromium;
       browser = await chromium.launch({ headless: true });
     }
   } catch (err) {
     const msg = (err as Error).message;
+    const isMissingPackage =
+      msg.includes("Cannot find package 'playwright'") ||
+      msg.includes("ERR_MODULE_NOT_FOUND");
     const isMissingBinary =
       msg.includes("Executable doesn't exist") ||
       msg.includes("playwright install") ||
       msg.includes("browserType.launch");
+    const isMissing = isMissingPackage || isMissingBinary;
     results.push({
       id: "sep24.interactive_browser_launch",
       description: "Launch headless browser and navigate to interactive URL",
-      status: isMissingBinary ? "warn" : "fail",
-      severity: isMissingBinary ? "warning" : "error",
-      message: isMissingBinary
-        ? `Browser launch skipped: Playwright Chromium binary not installed. Run "npx playwright install chromium" to enable.`
-        : `Failed to launch headless browser: ${msg}`,
+      status: isMissing ? "warn" : "fail",
+      severity: isMissing ? "warning" : "error",
+      message: isMissingPackage
+        ? 'Browser launch skipped: optional dependency "playwright" is not installed. Run "npm install playwright && npx playwright install chromium" to enable.'
+        : isMissingBinary
+          ? 'Browser launch skipped: Playwright Chromium binary not installed. Run "npx playwright install chromium" to enable.'
+          : `Failed to launch headless browser: ${msg}`,
     });
+    return { results };
+  }
+
+  if (!browser) {
     return { results };
   }
 

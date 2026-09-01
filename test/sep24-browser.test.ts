@@ -22,6 +22,24 @@ describe("runSep24BrowserChecks", () => {
     expect(launchCheck?.message).toContain("Playwright Chromium binary not installed");
   });
 
+  it("returns an actionable warning check if Playwright package is missing", async () => {
+    const customLauncher = vi.fn(async () => {
+      throw new Error("Cannot find package 'playwright' imported from sep24-browser.js");
+    });
+
+    const { results } = await runSep24BrowserChecks({
+      interactiveUrl: "https://anchor.example.com/interactive/flow",
+      browserLauncher: customLauncher as unknown as () => Promise<Browser>,
+    });
+
+    const launchCheck = results.find(
+      (r) => r.id === "sep24.interactive_browser_launch",
+    );
+    expect(launchCheck?.status).toBe("warn");
+    expect(launchCheck?.severity).toBe("warning");
+    expect(launchCheck?.message).toContain("npm install playwright");
+  });
+
   it("passes when navigation, form detection, and postMessage succeed", async () => {
     let postMessageCallback: ((data: unknown) => void) | null = null;
 

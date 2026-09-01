@@ -1,6 +1,5 @@
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
-import { runSep24BrowserChecks } from "./sep24-browser.js";
 import type { StellarToml } from "./sep1.js";
 
 export interface Sep24Options {
@@ -291,6 +290,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
     }
 
     if (opts.interactiveBrowser) {
+      const { runSep24BrowserChecks } = await import("./sep24-browser.js");
       const browserResult = await runSep24BrowserChecks({
         interactiveUrl,
         timeoutMs: opts.timeoutMs,
