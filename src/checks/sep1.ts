@@ -3,6 +3,10 @@ import { Networks, StrKey } from "@stellar/stellar-sdk";
 import { parse } from "smol-toml";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
+import { validateCurrencies, type Currency } from "./sep1-currencies.js";
+
+export type { Currency };
+export { validateCurrencies };
 
 export interface StellarToml {
   raw: Record<string, unknown>;
@@ -17,6 +21,7 @@ export interface StellarToml {
   directPaymentServer?: string;
   jwksUri?: string;
   accounts?: string[];
+  currencies?: Currency[];
 }
 
 export function validateHttpsUrl(
@@ -457,6 +462,9 @@ export function parseStellarToml(
     }
   }
 
+  // Extract and validate [[CURRENCIES]] if declared
+  const currencies = validateCurrencies(raw.CURRENCIES, results);
+
   return {
     toml: {
       raw,
@@ -471,6 +479,7 @@ export function parseStellarToml(
       directPaymentServer,
       jwksUri,
       accounts,
+      currencies,
     },
     results,
   };
