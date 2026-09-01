@@ -24,21 +24,31 @@ program
   .option("-n, --network <network>", "testnet or mainnet", "testnet")
   .option("-f, --format <format>", "output format: table or json", "table")
   .option("--client-domain <domain>", "Client domain for SEP-10 client_domain verification")
+  .option("-t, --timeout <ms>", "Request timeout in milliseconds", "10000")
   .action(
     async (
       domain: string,
-      options: { network: string; format: string; clientDomain?: string },
+      options: {
+        network: string;
+        format: string;
+        clientDomain?: string;
+        timeout: string;
+      },
     ) => {
       const network = options.network === "mainnet" ? "mainnet" : "testnet";
+      const timeoutMs = parseInt(options.timeout, 10) || 10000;
       const results: CheckResult[] = [];
 
-      const { toml, results: sep1Results } = await fetchStellarToml(domain);
+      const { toml, results: sep1Results } = await fetchStellarToml(
+        domain,
+        timeoutMs,
+      );
       results.push(...sep1Results);
 
       let clientSigningKey: string | undefined;
       if (options.clientDomain) {
         const { toml: clientToml, results: clientTomlResults } =
-          await fetchStellarToml(options.clientDomain);
+          await fetchStellarToml(options.clientDomain, timeoutMs);
         results.push(...clientTomlResults);
         clientSigningKey = clientToml.signingKey;
       }
@@ -49,6 +59,7 @@ program
         network,
         clientDomain: options.clientDomain,
         clientSigningKey,
+        timeoutMs,
       });
       results.push(...sep10Results);
 
