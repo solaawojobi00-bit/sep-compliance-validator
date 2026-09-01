@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Account, Keypair, MuxedAccount, Networks, Operation, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Account, Keypair, Memo, MuxedAccount, Networks, Operation, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import * as jose from "jose";
 import { runSep10Checks } from "../src/checks/sep10.js";
 import type { StellarToml } from "../src/checks/sep1.js";
@@ -1145,5 +1145,352 @@ describe("SEP-10 challenge nonce randomness and uniqueness", () => {
     expect(uniqueCheck?.message).toContain("second challenge request failed");
   });
 });
+
+describe("SEP-10 memo parameter and muxed (M...) accounts", () => {
+  const serverKeypair = Keypair.random();
+  const toml: StellarToml = {
+    raw: {},
+    webAuthEndpoint,
+    signingKey: serverKeypair.publicKey(),
+    networkPassphrase: Networks.TESTNET,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes memo flow with valid ID memo and matching G...:<memo> sub", async () => {
+    const requestedMemo = "17509749319012223907";
+    let capturedAccount = "";
+    let capturedMemo: string | null = null;
+
+    global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input.toString();
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+
+      const url = new URL(urlStr);
+
+      // Handle memo + muxed conflict test
+      if (url.searchParams.get("account")?.startsWith("M") && url.searchParams.get("memo")) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: "Cannot specify memo with muxed account" }),
+        } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+          capturedMemo = url.searchParams.get("memo");
+        }
+        const account = url.searchParams.get("account")!;
+        const memoVal = url.searchParams.get("memo") ?? requestedMemo;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+          memoVal,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(`${capturedAccount}:${capturedMemo}`) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      memo: requestedMemo,
+    });
+
+    expect(capturedMemo).toBe(requestedMemo);
+
+    const memoCheck = results.find((r) => r.id === "sep10.challenge_memo");
+    const conflictCheck = results.find((r) => r.id === "sep10.memo_muxed_conflict_rejected");
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+
+    expect(memoCheck?.status).toBe("pass");
+    expect(conflictCheck?.status).toBe("pass");
+    expect(subCheck?.status).toBe("pass");
+    expect(subCheck?.message).toContain(`${capturedAccount}:${requestedMemo}`);
+  });
+
+  it("passes muxed account flow with M... address returning M... sub unchanged", async () => {
+    let capturedAccount = "";
+
+    global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input.toString();
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+
+      const url = new URL(urlStr);
+
+      if (!init || init.method === undefined) {
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+        }
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(capturedAccount) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      useMuxedAccount: true,
+    });
+
+    expect(capturedAccount.startsWith("M")).toBe(true);
+
+    const clientCheck = results.find((r) => r.id === "sep10.challenge_client_account");
+    const subCheck = results.find((r) => r.id === "sep10.jwt_subject");
+
+    expect(clientCheck?.status).toBe("pass");
+    expect(subCheck?.status).toBe("pass");
+    expect(subCheck?.message).toContain("muxed account unchanged");
+  });
+
+  it("fails when server does not reject memo combined with muxed account", async () => {
+    const requestedMemo = "12345";
+    let capturedAccount = "";
+
+    global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input.toString();
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+
+      const url = new URL(urlStr);
+
+      // Server erroneously returns 200 for memo + muxed
+      if (url.searchParams.get("account")?.startsWith("M") && url.searchParams.get("memo")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ transaction: "mock" }),
+        } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+        }
+        const account = url.searchParams.get("account")!;
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+          requestedMemo,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(`${capturedAccount}:${requestedMemo}`) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      memo: requestedMemo,
+    });
+
+    const conflictCheck = results.find((r) => r.id === "sep10.memo_muxed_conflict_rejected");
+    expect(conflictCheck?.status).toBe("fail");
+    expect(conflictCheck?.message).toContain("Server failed to reject");
+  });
+
+  it("fails when challenge returns wrong memo type (text rather than id)", async () => {
+    const requestedMemo = "12345";
+    let capturedAccount = "";
+
+    function buildChallengeWithTextMemo(account: string): string {
+      const now = Math.floor(Date.now() / 1000);
+      const tx = new TransactionBuilder(new Account(serverKeypair.publicKey(), "-1"), {
+        fee: "100",
+        networkPassphrase: Networks.TESTNET,
+        timebounds: { minTime: now, maxTime: now + 300 },
+        memo: Memo.text(requestedMemo),
+      })
+        .addOperation(
+          Operation.manageData({
+            name: `${domain} auth`,
+            value: Buffer.from("cZgTAntdR+E4LnWI5FjXUWiz0WxqkDqUJsOmWVarS27y5214To8IbWgaEVLNuQSB"),
+            source: account,
+          }),
+        )
+        .addOperation(
+          Operation.manageData({
+            name: "web_auth_domain",
+            value: webAuthDomain,
+            source: serverKeypair.publicKey(),
+          }),
+        )
+        .build();
+      tx.sign(serverKeypair);
+      return tx.toXDR();
+    }
+
+    global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input.toString();
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+
+      const url = new URL(urlStr);
+
+      if (url.searchParams.get("account")?.startsWith("M") && url.searchParams.get("memo")) {
+        return { ok: false, status: 400 } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+        }
+        const account = url.searchParams.get("account")!;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: buildChallengeWithTextMemo(account),
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(`${capturedAccount}:${requestedMemo}`) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      memo: requestedMemo,
+    });
+
+    const memoCheck = results.find((r) => r.id === "sep10.challenge_memo");
+    expect(memoCheck?.status).toBe("fail");
+    expect(memoCheck?.message).toContain('Expected memo of type "id" with value "12345", got type "text"');
+  });
+
+  it("fails when challenge is missing memo when memo was requested", async () => {
+    const requestedMemo = "12345";
+    let capturedAccount = "";
+
+    global.fetch = vi.fn(async (_input, init) => {
+      const urlStr = _input.toString();
+      if (urlStr.includes(".well-known/jwks.json")) {
+        return { ok: false, status: 404 } as Response;
+      }
+
+      const url = new URL(urlStr);
+
+      if (url.searchParams.get("account")?.startsWith("M") && url.searchParams.get("memo")) {
+        return { ok: false, status: 400 } as Response;
+      }
+
+      if (!init || init.method === undefined) {
+        if (!capturedAccount) {
+          capturedAccount = url.searchParams.get("account")!;
+        }
+        const account = url.searchParams.get("account")!;
+        // build without memo
+        const challengeXdr = WebAuth.buildChallengeTx(
+          serverKeypair,
+          account,
+          domain,
+          300,
+          Networks.TESTNET,
+          webAuthDomain,
+        );
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            transaction: challengeXdr,
+            network_passphrase: Networks.TESTNET,
+          }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ token: fakeJwt(`${capturedAccount}:${requestedMemo}`) }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep10Checks({
+      domain,
+      toml,
+      network: "testnet",
+      memo: requestedMemo,
+    });
+
+    const memoCheck = results.find((r) => r.id === "sep10.challenge_memo");
+    expect(memoCheck?.status).toBe("fail");
+    expect(memoCheck?.message).toContain('Expected memo of type "id" with value "12345", got type "none"');
+  });
+});
+
 
 

@@ -38,6 +38,8 @@ program
     "--interactive-browser",
     "Run headless browser automation against SEP-24 interactive URL",
   )
+  .option("--memo <id>", "Numeric ID memo for SEP-10 challenge authentication")
+  .option("--muxed", "Authenticate using a muxed (M...) account for SEP-10")
   .action(
     async (
       domain: string,
@@ -48,6 +50,8 @@ program
         timeout: string;
         iUnderstandThisTouchesProduction?: boolean;
         interactiveBrowser?: boolean;
+        memo?: string;
+        muxed?: boolean;
       },
     ) => {
       // 1. Validate --format
@@ -78,7 +82,24 @@ program
         return;
       }
 
-      // 4. Validate mainnet production guard
+      // 4. Validate memo
+      if (options.memo && !/^\d+$/.test(options.memo)) {
+        console.error(
+          `Error: Invalid memo "${options.memo}". Memo must be a positive integer string.`,
+        );
+        process.exitCode = 2;
+        return;
+      }
+
+      if (options.memo && options.muxed) {
+        console.error(
+          "Error: Cannot specify both --memo and --muxed. SEP-10 forbids memo with muxed accounts.",
+        );
+        process.exitCode = 2;
+        return;
+      }
+
+      // 5. Validate mainnet production guard
       if (
         options.network === "mainnet" &&
         !options.iUnderstandThisTouchesProduction
@@ -122,6 +143,8 @@ program
               clientDomain: options.clientDomain,
               clientSigningKey,
               timeoutMs,
+              memo: options.memo,
+              useMuxedAccount: options.muxed,
             });
           });
           results.push(...sep10Results);

@@ -58,6 +58,26 @@ describe("CLI input validation and error boundaries", () => {
     }
   });
 
+  it("rejects non-numeric --memo with code 2", async () => {
+    try {
+      await execAsync(`${cliPath} check example.com --memo notdigits`);
+      expect.fail("Expected CLI to exit with code 2");
+    } catch (err: any) {
+      expect(err.code).toBe(2);
+      expect(err.stderr).toContain('Invalid memo "notdigits"');
+    }
+  });
+
+  it("rejects simultaneous --memo and --muxed with code 2", async () => {
+    try {
+      await execAsync(`${cliPath} check example.com --memo 12345 --muxed`);
+      expect.fail("Expected CLI to exit with code 2");
+    } catch (err: any) {
+      expect(err.code).toBe(2);
+      expect(err.stderr).toContain("Cannot specify both --memo and --muxed");
+    }
+  });
+
   it("fails sep1.web_auth_endpoint when WEB_AUTH_ENDPOINT is not a valid absolute URL", () => {
     const rawToml = `
 VERSION = "2.0.0"
