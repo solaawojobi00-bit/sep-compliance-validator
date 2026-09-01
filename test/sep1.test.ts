@@ -1,3 +1,4 @@
+import { Networks } from "@stellar/stellar-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchStellarToml, parseStellarToml } from "../src/checks/sep1.js";
 
@@ -177,3 +178,60 @@ WEB_AUTH_ENDPOINT = "https://auth.example.com"
     expect(results.some((r) => r.id === "sep1.url.jwks_uri")).toBe(false);
   });
 });
+
+describe("SEP-1 NETWORK_PASSPHRASE value validation", () => {
+  it("fails when declared mainnet passphrase does not match testnet target", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "GABCXYZ"
+WEB_AUTH_ENDPOINT = "https://auth.example.com"
+NETWORK_PASSPHRASE = "${Networks.PUBLIC}"
+`;
+    const { results } = parseStellarToml(rawToml, "testnet");
+    const check = results.find((r) => r.id === "sep1.network_passphrase_value");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain(Networks.PUBLIC);
+    expect(check?.message).toContain(Networks.TESTNET);
+    expect(check?.message).toContain("--network mainnet");
+  });
+
+  it("fails when declared testnet passphrase does not match mainnet target", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "GABCXYZ"
+WEB_AUTH_ENDPOINT = "https://auth.example.com"
+NETWORK_PASSPHRASE = "${Networks.TESTNET}"
+`;
+    const { results } = parseStellarToml(rawToml, "mainnet");
+    const check = results.find((r) => r.id === "sep1.network_passphrase_value");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain(Networks.TESTNET);
+    expect(check?.message).toContain(Networks.PUBLIC);
+    expect(check?.message).toContain("--network testnet");
+  });
+
+  it("passes when declared passphrase matches target network", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "GABCXYZ"
+WEB_AUTH_ENDPOINT = "https://auth.example.com"
+NETWORK_PASSPHRASE = "${Networks.TESTNET}"
+`;
+    const { results } = parseStellarToml(rawToml, "testnet");
+    const check = results.find((r) => r.id === "sep1.network_passphrase_value");
+    expect(check?.status).toBe("pass");
+  });
+
+  it("maintains warn on presence and skips value check when NETWORK_PASSPHRASE is absent", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "GABCXYZ"
+WEB_AUTH_ENDPOINT = "https://auth.example.com"
+`;
+    const { results } = parseStellarToml(rawToml, "testnet");
+    const presenceCheck = results.find((r) => r.id === "sep1.network_passphrase");
+    expect(presenceCheck?.status).toBe("warn");
+    expect(results.some((r) => r.id === "sep1.network_passphrase_value")).toBe(false);
+  });
+});
+
