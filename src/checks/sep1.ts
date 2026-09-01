@@ -54,6 +54,16 @@ export async function fetchStellarToml(
     message: `Fetched ${url}`,
   });
 
+  const parsed = parseStellarToml(text);
+  results.push(...parsed.results);
+  return { toml: parsed.toml, results };
+}
+
+export function parseStellarToml(text: string): {
+  toml: StellarToml;
+  results: CheckResult[];
+} {
+  const results: CheckResult[] = [];
   let raw: Record<string, unknown>;
   try {
     raw = parse(text) as Record<string, unknown>;
@@ -76,26 +86,44 @@ export async function fetchStellarToml(
     message: "stellar.toml parsed successfully",
   });
 
-  const webAuthEndpoint =
-    typeof raw.WEB_AUTH_ENDPOINT === "string" ? raw.WEB_AUTH_ENDPOINT : undefined;
-  results.push(
-    webAuthEndpoint
-      ? {
-          id: "sep1.web_auth_endpoint",
-          description: "stellar.toml declares WEB_AUTH_ENDPOINT",
-          status: "pass",
-          severity: "error",
-          message: `WEB_AUTH_ENDPOINT = ${webAuthEndpoint}`,
-        }
-      : {
-          id: "sep1.web_auth_endpoint",
-          description: "stellar.toml declares WEB_AUTH_ENDPOINT",
-          status: "fail",
-          severity: "error",
-          message:
-            "WEB_AUTH_ENDPOINT is missing or not a string; SEP-10 checks cannot run",
-        },
-  );
+  let validWebAuthUrl: string | undefined;
+  if (typeof raw.WEB_AUTH_ENDPOINT === "string") {
+    try {
+      const parsed = new URL(raw.WEB_AUTH_ENDPOINT);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+        validWebAuthUrl = raw.WEB_AUTH_ENDPOINT;
+      }
+    } catch {
+      // Invalid URL
+    }
+  }
+
+  if (validWebAuthUrl) {
+    results.push({
+      id: "sep1.web_auth_endpoint",
+      description: "stellar.toml declares WEB_AUTH_ENDPOINT",
+      status: "pass",
+      severity: "error",
+      message: `WEB_AUTH_ENDPOINT = ${validWebAuthUrl}`,
+    });
+  } else if (raw.WEB_AUTH_ENDPOINT !== undefined) {
+    results.push({
+      id: "sep1.web_auth_endpoint",
+      description: "stellar.toml declares WEB_AUTH_ENDPOINT",
+      status: "fail",
+      severity: "error",
+      message: `WEB_AUTH_ENDPOINT "${raw.WEB_AUTH_ENDPOINT}" is not a valid absolute URL`,
+    });
+  } else {
+    results.push({
+      id: "sep1.web_auth_endpoint",
+      description: "stellar.toml declares WEB_AUTH_ENDPOINT",
+      status: "fail",
+      severity: "error",
+      message:
+        "WEB_AUTH_ENDPOINT is missing or not a string; SEP-10 checks cannot run",
+    });
+  }
 
   const signingKey =
     typeof raw.SIGNING_KEY === "string" ? raw.SIGNING_KEY : undefined;
@@ -164,7 +192,7 @@ export async function fetchStellarToml(
   return {
     toml: {
       raw,
-      webAuthEndpoint,
+      webAuthEndpoint: validWebAuthUrl,
       signingKey,
       networkPassphrase,
       anchorQuoteServer,
