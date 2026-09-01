@@ -7,6 +7,7 @@ import { runSep24Checks } from "./checks/sep24.js";
 import { runSep38Checks } from "./checks/sep38.js";
 import type { CheckResult, Report } from "./core/report.js";
 import { summarize } from "./core/report.js";
+import { printHtml } from "./output/html.js";
 import { printJson } from "./output/json.js";
 import { printTable } from "./output/table.js";
 
@@ -22,7 +23,7 @@ program
   .description("Run SEP-1, SEP-10, SEP-12, SEP-24, and SEP-38 conformance checks against an anchor's home domain")
   .argument("<domain>", "Anchor home domain, e.g. example.com")
   .option("-n, --network <network>", "testnet or mainnet", "testnet")
-  .option("-f, --format <format>", "output format: table or json", "table")
+  .option("-f, --format <format>", "output format: table, json, or html", "table")
   .option("--client-domain <domain>", "Client domain for SEP-10 client_domain verification")
   .option("-t, --timeout <ms>", "Request timeout in milliseconds", "10000")
   .action(
@@ -120,6 +121,8 @@ program
 
     if (options.format === "json") {
       printJson(report);
+    } else if (options.format === "html") {
+      printHtml(report);
     } else {
       printTable(report);
     }
