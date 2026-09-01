@@ -60,7 +60,19 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
 
   const webAuthEndpoint = toml.webAuthEndpoint;
   const signingKey = toml.signingKey;
-  const webAuthDomain = new URL(webAuthEndpoint).host;
+  let webAuthDomain: string;
+  try {
+    webAuthDomain = new URL(webAuthEndpoint).host;
+  } catch (err) {
+    results.push({
+      id: "sep10.web_auth_endpoint",
+      description: "WEB_AUTH_ENDPOINT is a valid URL",
+      status: "fail",
+      severity: "error",
+      message: `Invalid WEB_AUTH_ENDPOINT "${webAuthEndpoint}": ${(err as Error).message}`,
+    });
+    return results;
+  }
   const clientKeypair = Keypair.random();
 
   // 1. Request a challenge transaction.
