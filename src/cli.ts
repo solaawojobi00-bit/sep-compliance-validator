@@ -30,6 +30,10 @@ program
     "--i-understand-this-touches-production",
     "Explicit confirmation required when running checks against mainnet",
   )
+  .option(
+    "--interactive-browser",
+    "Run headless browser automation against SEP-24 interactive URL",
+  )
   .action(
     async (
       domain: string,
@@ -39,6 +43,7 @@ program
         clientDomain?: string;
         timeout: string;
         iUnderstandThisTouchesProduction?: boolean;
+        interactiveBrowser?: boolean;
       },
     ) => {
       if (
@@ -114,6 +119,8 @@ program
         toml,
         network,
         jwt: sep10Results.jwt!,
+        timeoutMs,
+        interactiveBrowser: options.interactiveBrowser,
       });
       results.push(...sep24Results);
     }

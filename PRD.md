@@ -62,14 +62,11 @@ Given an anchor's home domain, the tool will:
 5. **Mainnet validation (supported, opt-in)** — `--network mainnet` is supported
    with an explicit confirmation flag (`--i-understand-this-touches-production`)
    to prevent unintended test runs against live production anchor infrastructure.
+6. **SEP-24 interactive webapp automation** — `--interactive-browser` uses headless
+   browser automation (Playwright) to validate form discovery and postMessage/redirect completion.
 
 ## Out of Scope (v1)
 
-- SEP-24 interactive deposit/withdraw flow validation (requires headless browser
-  automation for the interactive webapp redirect — Phase 2).
-- SEP-12 KYC field validation (requires an authenticated session built on top of
-  SEP-10 — Phase 2).
-- SEP-38 quote endpoint validation (Phase 2).
 - SEP-6 programmatic deposit/withdraw execution (moves real/test funds —
   deferred, may remain out of scope permanently or sandboxed only).
 - Hosted public dashboard / leaderboard of tested anchors (Phase 3).

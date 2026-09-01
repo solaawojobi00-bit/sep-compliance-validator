@@ -1,5 +1,6 @@
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
+import { runSep24BrowserChecks } from "./sep24-browser.js";
 import type { StellarToml } from "./sep1.js";
 
 export interface Sep24Options {
@@ -7,6 +8,8 @@ export interface Sep24Options {
   toml: StellarToml;
   network: "testnet" | "mainnet";
   jwt: string;
+  timeoutMs?: number;
+  interactiveBrowser?: boolean;
 }
 
 export const VALID_SEP24_STATUSES = [
@@ -280,6 +283,14 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
         severity: "error",
         message: `Failed to reach interactive URL ${interactiveUrl}: ${(err as Error).message}`,
       });
+    }
+
+    if (opts.interactiveBrowser) {
+      const browserResult = await runSep24BrowserChecks({
+        interactiveUrl,
+        timeoutMs: opts.timeoutMs,
+      });
+      results.push(...browserResult.results);
     }
   } else {
     results.push({
