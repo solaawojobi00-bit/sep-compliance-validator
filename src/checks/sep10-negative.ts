@@ -20,6 +20,43 @@ export interface Sep10NegativeOptions {
   timeoutMs?: number;
 }
 
+/**
+ * A challenge we forge locally cannot carry the anchor's real server account as its
+ * source, because that would require the anchor's signing key. Anchors therefore
+ * commonly reject a forged challenge on source-account mismatch *before* they ever
+ * evaluate its timebounds or network passphrase. A bare HTTP 4xx is consequently not
+ * evidence that the condition under test was exercised, so for those cases we also
+ * inspect the anchor's stated reason.
+ */
+interface RejectionExpectation {
+  /** The condition under test, named for the report message. */
+  condition: string;
+  /** Patterns in the anchor's error message that show `condition` was evaluated. */
+  patterns: RegExp[];
+}
+
+const EXPIRY_EXPECTATION: RejectionExpectation = {
+  condition: "challenge expiry",
+  patterns: [/expir/i, /time\s?bound/i, /not\s+within/i, /too\s+old/i, /stale/i],
+};
+
+const NETWORK_EXPECTATION: RejectionExpectation = {
+  condition: "network passphrase validation",
+  patterns: [/network/i, /passphrase/i],
+};
+
+function extractRejectionReason(body: {
+  error?: unknown;
+  message?: unknown;
+}): string | undefined {
+  for (const candidate of [body.error, body.message]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
 async function submitAndAssertRejected(
   checkId: string,
   description: string,
@@ -27,6 +64,7 @@ async function submitAndAssertRejected(
   txXdr: string,
   webAuthEndpoint: string,
   timeoutMs?: number,
+  expectation?: RejectionExpectation,
 ): Promise<CheckResult> {
   try {
     const res = await fetchWithTimeout(
@@ -42,6 +80,7 @@ async function submitAndAssertRejected(
     const body = (await res.json().catch(() => ({}))) as {
       token?: string;
       error?: string;
+      message?: string;
     };
 
     if (res.ok || body.token) {
@@ -55,12 +94,52 @@ async function submitAndAssertRejected(
     }
 
     if (res.status >= 400 && res.status < 500) {
+      const reason = extractRejectionReason(body);
+
+      // Cases that reuse the anchor's own server-signed challenge (tampered payload,
+      // missing client signature) need no reason analysis: a 4xx is conclusive.
+      if (!expectation) {
+        return {
+          id: checkId,
+          description,
+          status: "pass",
+          severity: "error",
+          message: `Anchor correctly rejected ${caseName} with HTTP ${res.status}${reason ? `: "${reason}"` : ""}`,
+        };
+      }
+
+      if (!reason) {
+        return {
+          id: checkId,
+          description,
+          status: "warn",
+          severity: "warning",
+          message:
+            `Anchor rejected ${caseName} with HTTP ${res.status} but gave no error message, ` +
+            `so ${expectation.condition} was NOT verified — the rejection may have been for an unrelated reason ` +
+            `(a forged challenge cannot carry the anchor's real source account).`,
+        };
+      }
+
+      if (expectation.patterns.some((p) => p.test(reason))) {
+        return {
+          id: checkId,
+          description,
+          status: "pass",
+          severity: "error",
+          message: `Anchor correctly rejected ${caseName} with HTTP ${res.status}, citing ${expectation.condition}: "${reason}"`,
+        };
+      }
+
       return {
         id: checkId,
         description,
-        status: "pass",
-        severity: "error",
-        message: `Anchor correctly rejected ${caseName} with HTTP ${res.status}${body.error ? `: "${body.error}"` : ""}`,
+        status: "warn",
+        severity: "warning",
+        message:
+          `Anchor rejected ${caseName} with HTTP ${res.status}, but its stated reason ("${reason}") ` +
+          `does not reference ${expectation.condition} — it rejected on an earlier check, so ` +
+          `${expectation.condition} was NOT verified by this run.`,
       };
     }
 
@@ -140,6 +219,7 @@ export async function runSep10NegativeChecks(
       expiredTx.toXDR(),
       webAuthEndpoint,
       timeoutMs,
+      EXPIRY_EXPECTATION,
     );
     results.push(expiredResult);
   } catch (err) {
@@ -173,6 +253,7 @@ export async function runSep10NegativeChecks(
       wrongNetTx.toXDR(),
       webAuthEndpoint,
       timeoutMs,
+      NETWORK_EXPECTATION,
     );
     results.push(wrongNetResult);
   } catch (err) {
