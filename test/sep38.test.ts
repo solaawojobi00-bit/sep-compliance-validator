@@ -255,7 +255,12 @@ describe("runSep38Checks", () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ assets: [{ asset: "iso4217:USD" }] }),
+          json: async () => ({
+            assets: [
+              { asset: "iso4217:USD" },
+              { asset: "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" },
+            ],
+          }),
         } as unknown as Response;
       }
       if (urlStr === "https://quote.example.com/prices") {
@@ -325,6 +330,182 @@ describe("runSep38Checks", () => {
     const infoCheck = results.find((r) => r.id === "sep38.info");
     expect(infoCheck?.status).toBe("fail");
     expect(infoCheck?.message).toContain("timed out after 25ms");
+  });
+
+  it("sends sell_amount in GET /prices and handles buy_assets format", async () => {
+    let capturedPricesUrl: string | undefined;
+
+    global.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
+      const urlStr = url.toString();
+      if (urlStr === "https://quote.example.com/info") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            assets: [
+              { asset: "iso4217:USD" },
+              { asset: "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/prices") {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.includes("not-a-valid-asset")) {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/prices?")) {
+        capturedPricesUrl = urlStr;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            buy_assets: [
+              {
+                asset: "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+                price: "1.00",
+                decimals: 7,
+              },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/price?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            total_price: "1.00",
+            price: "1.00",
+            sell_amount: "100",
+            buy_amount: "100",
+            fee: { total: "0", asset: "iso4217:USD" },
+          }),
+        } as unknown as Response;
+      }
+      throw new Error(`Unexpected url: ${urlStr}`);
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+    });
+
+    expect(capturedPricesUrl).toBeDefined();
+    expect(capturedPricesUrl).toContain("sell_amount=100");
+    expect(capturedPricesUrl).toContain("sell_asset=iso4217%3AUSD");
+
+    const pricesSchemaCheck = results.find((r) => r.id === "sep38.prices_schema");
+    expect(pricesSchemaCheck?.status).toBe("pass");
+
+    const pricesPosCheck = results.find((r) => r.id === "sep38.prices_positive");
+    expect(pricesPosCheck?.status).toBe("pass");
+  });
+
+  it("surfaces client request parameter error on 400 without reporting anchor schema failure", async () => {
+    global.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
+      const urlStr = url.toString();
+      if (urlStr === "https://quote.example.com/info") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            assets: [
+              { asset: "iso4217:USD" },
+              { asset: "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/prices") {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.includes("not-a-valid-asset")) {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/prices?")) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'The "sell_amount" parameter is missing.' }),
+        } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/price?")) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: "Unsupported context. Should be one of [sep6, sep31]." }),
+        } as unknown as Response;
+      }
+      throw new Error(`Unexpected url: ${urlStr}`);
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+    });
+
+    const pricesReqError = results.find((r) => r.id === "sep38.prices_request_error");
+    expect(pricesReqError?.status).toBe("warn");
+    expect(pricesReqError?.message).toContain("sell_amount");
+
+    const pricesSchemaCheck = results.find((r) => r.id === "sep38.prices_schema");
+    expect(pricesSchemaCheck?.status).toBe("warn");
+    expect(pricesSchemaCheck?.message).toContain("Skipped");
+
+    const priceReqError = results.find((r) => r.id === "sep38.price_request_error");
+    expect(priceReqError?.status).toBe("warn");
+    expect(priceReqError?.message).toContain("Unsupported context");
+
+    const priceSchemaCheck = results.find((r) => r.id === "sep38.price_schema");
+    expect(priceSchemaCheck?.status).toBe("warn");
+    expect(priceSchemaCheck?.message).toContain("Skipped");
+  });
+
+  it("does not pair asset with itself when only one asset is advertised in /info", async () => {
+    let priceEndpointCalled = false;
+
+    global.fetch = vi.fn().mockImplementation(async (url: string | URL | Request) => {
+      const urlStr = url.toString();
+      if (urlStr === "https://quote.example.com/info") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            assets: [{ asset: "stellar:native" }],
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/prices" || urlStr.includes("not-a-valid-asset")) {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/prices?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ buy_assets: [] }),
+        } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/price?")) {
+        priceEndpointCalled = true;
+        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+      }
+      throw new Error(`Unexpected url: ${urlStr}`);
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+    });
+
+    expect(priceEndpointCalled).toBe(false);
+    const priceSchemaCheck = results.find((r) => r.id === "sep38.price_schema");
+    expect(priceSchemaCheck?.status).toBe("warn");
+    expect(priceSchemaCheck?.message).toContain("at least two distinct assets are required");
   });
 });
 

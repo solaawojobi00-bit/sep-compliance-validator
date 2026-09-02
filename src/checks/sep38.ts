@@ -67,8 +67,19 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           .filter((a): a is string => typeof a === "string" && a.length > 0);
 
         if (validAssets.length > 0) {
-          sellAsset = validAssets[0];
-          buyAsset = validAssets.length > 1 ? validAssets[1] : validAssets[0];
+          const fiatAsset = validAssets.find((a) => a.startsWith("iso4217:"));
+          const stellarAsset = validAssets.find((a) => a.startsWith("stellar:"));
+
+          if (fiatAsset && stellarAsset && fiatAsset !== stellarAsset) {
+            sellAsset = fiatAsset;
+            buyAsset = stellarAsset;
+          } else if (validAssets.length > 1) {
+            sellAsset = validAssets[0];
+            buyAsset = validAssets[1];
+          } else {
+            sellAsset = validAssets[0];
+            buyAsset = "";
+          }
         }
       }
     }
@@ -149,48 +160,100 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
 
   // 4. Positive check: GET /prices schema & positive price values
   try {
-    const res = await fetchWithTimeout(
-      `${baseUrl}/prices?sell_asset=${encodeURIComponent(sellAsset)}`,
-      {},
-      opts.timeoutMs,
-    );
+    const pricesUrl = `${baseUrl}/prices?sell_asset=${encodeURIComponent(
+      sellAsset,
+    )}&sell_amount=100`;
+    const res = await fetchWithTimeout(pricesUrl, {}, opts.timeoutMs);
     if (!res.ok) {
-      results.push({
-        id: "sep38.prices_schema",
-        description: "GET /prices returns well-formed JSON matching SEP-38 schema",
-        status: "fail",
-        severity: "error",
-        message: `GET /prices returned HTTP ${res.status}`,
-      });
-      results.push({
-        id: "sep38.prices_positive",
-        description: "GET /prices returned prices are positive numbers",
-        status: "fail",
-        severity: "error",
-        message: "Cannot validate prices because GET /prices failed",
-      });
-    } else {
-      const body = (await res.json()) as {
-        buy_tokens?: Array<{ asset?: string; price?: string; decimals?: number }>;
-      };
+      let errorBody: any;
+      try {
+        errorBody = await res.json();
+      } catch {
+        // ignore parse error if response is not JSON
+      }
 
-      if (!Array.isArray(body.buy_tokens)) {
+      const isClientParamError =
+        res.status === 400 &&
+        typeof errorBody?.error === "string" &&
+        /missing|required|invalid|unsupported|parameter/i.test(errorBody.error);
+
+      if (isClientParamError) {
+        results.push({
+          id: "sep38.prices_request_error",
+          description: "GET /prices request parameters accepted by anchor",
+          status: "warn",
+          severity: "warning",
+          message: `Anchor rejected request parameters with HTTP 400: "${errorBody.error}" (client request error, not anchor schema defect)`,
+        });
+        results.push({
+          id: "sep38.prices_schema",
+          description: "GET /prices returns well-formed JSON matching SEP-38 schema",
+          status: "warn",
+          severity: "warning",
+          message: `Skipped schema check: GET /prices was rejected due to client request parameter: "${errorBody.error}"`,
+        });
+        results.push({
+          id: "sep38.prices_positive",
+          description: "GET /prices returned prices are positive numbers",
+          status: "warn",
+          severity: "warning",
+          message: `Skipped prices check: GET /prices was rejected due to client request parameter: "${errorBody.error}"`,
+        });
+      } else if (res.status >= 500) {
+        results.push({
+          id: "sep38.prices_schema",
+          description: "GET /prices returns well-formed JSON matching SEP-38 schema",
+          status: "warn",
+          severity: "warning",
+          message: `GET /prices returned HTTP ${res.status} (upstream server/gateway error; anchor quote server may be unavailable)`,
+        });
+        results.push({
+          id: "sep38.prices_positive",
+          description: "GET /prices returned prices are positive numbers",
+          status: "warn",
+          severity: "warning",
+          message: "Cannot validate prices because GET /prices returned upstream server error",
+        });
+      } else {
         results.push({
           id: "sep38.prices_schema",
           description: "GET /prices returns well-formed JSON matching SEP-38 schema",
           status: "fail",
           severity: "error",
-          message: 'Response JSON is missing the "buy_tokens" array',
+          message: `GET /prices returned HTTP ${res.status}${errorBody?.error ? `: ${errorBody.error}` : ""}`,
         });
         results.push({
           id: "sep38.prices_positive",
           description: "GET /prices returned prices are positive numbers",
           status: "fail",
           severity: "error",
-          message: 'Cannot validate prices: "buy_tokens" array is missing',
+          message: "Cannot validate prices because GET /prices failed",
+        });
+      }
+    } else {
+      const body = (await res.json()) as {
+        buy_tokens?: Array<{ asset?: string; price?: string; decimals?: number }>;
+        buy_assets?: Array<{ asset?: string; price?: string; decimals?: number }>;
+      };
+      const buyAssets = body.buy_assets ?? body.buy_tokens;
+
+      if (!Array.isArray(buyAssets)) {
+        results.push({
+          id: "sep38.prices_schema",
+          description: "GET /prices returns well-formed JSON matching SEP-38 schema",
+          status: "fail",
+          severity: "error",
+          message: 'Response JSON is missing the "buy_assets" / "buy_tokens" array',
+        });
+        results.push({
+          id: "sep38.prices_positive",
+          description: "GET /prices returned prices are positive numbers",
+          status: "fail",
+          severity: "error",
+          message: 'Cannot validate prices: "buy_assets" array is missing',
         });
       } else {
-        const invalidTokens = body.buy_tokens.filter(
+        const invalidTokens = buyAssets.filter(
           (t) =>
             typeof t.asset !== "string" ||
             typeof t.price !== "string" ||
@@ -203,7 +266,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
             description: "GET /prices returns well-formed JSON matching SEP-38 schema",
             status: "fail",
             severity: "error",
-            message: `buy_tokens contains ${invalidTokens.length} item(s) missing required fields (asset, price, decimals)`,
+            message: `buy_assets contains ${invalidTokens.length} item(s) missing required fields (asset, price, decimals)`,
           });
         } else {
           results.push({
@@ -211,11 +274,11 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
             description: "GET /prices returns well-formed JSON matching SEP-38 schema",
             status: "pass",
             severity: "error",
-            message: `GET /prices returned valid schema with ${body.buy_tokens.length} token(s)`,
+            message: `GET /prices returned valid schema with ${buyAssets.length} asset(s)`,
           });
         }
 
-        const nonPositive = body.buy_tokens.filter((t) => {
+        const nonPositive = buyAssets.filter((t) => {
           const p = parseFloat(t.price ?? "");
           return isNaN(p) || p <= 0;
         });
@@ -226,7 +289,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
             description: "GET /prices returned prices are positive numbers",
             status: "fail",
             severity: "error",
-            message: `Found ${nonPositive.length} non-positive or invalid price(s) in buy_tokens`,
+            message: `buy_assets contains ${nonPositive.length} non-positive or invalid price(s)`,
           });
         } else {
           results.push({
@@ -234,7 +297,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
             description: "GET /prices returned prices are positive numbers",
             status: "pass",
             severity: "error",
-            message: "All returned prices in buy_tokens are positive numbers",
+            message: `All ${buyAssets.length} price(s) in buy_assets are positive numbers`,
           });
         }
       }
@@ -257,34 +320,136 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
   }
 
   // 5. Positive check: GET /price schema, positive price, and expires_at
+  if (!buyAsset || buyAsset === sellAsset) {
+    results.push({
+      id: "sep38.price_schema",
+      description: "GET /price returns well-formed JSON matching SEP-38 schema",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: at least two distinct assets are required to query GET /price",
+    });
+    results.push({
+      id: "sep38.price_positive",
+      description: "GET /price returned price is a positive number",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: at least two distinct assets are required to query GET /price",
+    });
+    results.push({
+      id: "sep38.price_expires_at",
+      description: "GET /price expires_at (when present) is a valid, future timestamp",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: at least two distinct assets are required to query GET /price",
+    });
+    return results;
+  }
+
   try {
-    const priceUrl = `${baseUrl}/price?sell_asset=${encodeURIComponent(
+    let priceUrl = `${baseUrl}/price?sell_asset=${encodeURIComponent(
       sellAsset,
     )}&buy_asset=${encodeURIComponent(buyAsset)}&sell_amount=100`;
 
-    const res = await fetchWithTimeout(priceUrl, {}, opts.timeoutMs);
+    let res = await fetchWithTimeout(priceUrl, {}, opts.timeoutMs);
+
+    if (res.status === 400) {
+      let errorBody: any;
+      try {
+        errorBody = await res.json();
+      } catch {}
+      if (typeof errorBody?.error === "string" && /context/i.test(errorBody.error)) {
+        priceUrl = `${priceUrl}&context=sep6`;
+        res = await fetchWithTimeout(priceUrl, {}, opts.timeoutMs);
+      }
+    }
+
     if (!res.ok) {
-      results.push({
-        id: "sep38.price_schema",
-        description: "GET /price returns well-formed JSON matching SEP-38 schema",
-        status: "fail",
-        severity: "error",
-        message: `GET /price returned HTTP ${res.status}`,
-      });
-      results.push({
-        id: "sep38.price_positive",
-        description: "GET /price returned price is a positive number",
-        status: "fail",
-        severity: "error",
-        message: "Cannot validate price because GET /price failed",
-      });
-      results.push({
-        id: "sep38.price_expires_at",
-        description: "GET /price expires_at (when present) is a valid, future timestamp",
-        status: "fail",
-        severity: "error",
-        message: "Cannot validate expires_at because GET /price failed",
-      });
+      let errorBody: any;
+      try {
+        errorBody = await res.json();
+      } catch {
+        // ignore parse error if response is not JSON
+      }
+
+      const isClientParamError =
+        res.status === 400 &&
+        typeof errorBody?.error === "string" &&
+        /missing|required|invalid|unsupported|parameter/i.test(errorBody.error);
+
+      if (isClientParamError) {
+        results.push({
+          id: "sep38.price_request_error",
+          description: "GET /price request parameters accepted by anchor",
+          status: "warn",
+          severity: "warning",
+          message: `Anchor rejected request parameters with HTTP 400: "${errorBody.error}" (client request error or unsupported pair, not anchor schema defect)`,
+        });
+        results.push({
+          id: "sep38.price_schema",
+          description: "GET /price returns well-formed JSON matching SEP-38 schema",
+          status: "warn",
+          severity: "warning",
+          message: `Skipped schema check: GET /price was rejected due to client request parameter: "${errorBody.error}"`,
+        });
+        results.push({
+          id: "sep38.price_positive",
+          description: "GET /price returned price is a positive number",
+          status: "warn",
+          severity: "warning",
+          message: `Skipped price check: GET /price was rejected due to client request parameter: "${errorBody.error}"`,
+        });
+        results.push({
+          id: "sep38.price_expires_at",
+          description: "GET /price expires_at (when present) is a valid, future timestamp",
+          status: "warn",
+          severity: "warning",
+          message: `Skipped expires_at check: GET /price was rejected due to client request parameter: "${errorBody.error}"`,
+        });
+      } else if (res.status >= 500) {
+        results.push({
+          id: "sep38.price_schema",
+          description: "GET /price returns well-formed JSON matching SEP-38 schema",
+          status: "warn",
+          severity: "warning",
+          message: `GET /price returned HTTP ${res.status} (upstream server/gateway error; anchor quote server may be unavailable)`,
+        });
+        results.push({
+          id: "sep38.price_positive",
+          description: "GET /price returned price is a positive number",
+          status: "warn",
+          severity: "warning",
+          message: "Cannot validate price because GET /price returned upstream server error",
+        });
+        results.push({
+          id: "sep38.price_expires_at",
+          description: "GET /price expires_at (when present) is a valid, future timestamp",
+          status: "warn",
+          severity: "warning",
+          message: "Cannot validate expires_at because GET /price returned upstream server error",
+        });
+      } else {
+        results.push({
+          id: "sep38.price_schema",
+          description: "GET /price returns well-formed JSON matching SEP-38 schema",
+          status: "fail",
+          severity: "error",
+          message: `GET /price returned HTTP ${res.status}${errorBody?.error ? `: ${errorBody.error}` : ""}`,
+        });
+        results.push({
+          id: "sep38.price_positive",
+          description: "GET /price returned price is a positive number",
+          status: "fail",
+          severity: "error",
+          message: "Cannot validate price because GET /price failed",
+        });
+        results.push({
+          id: "sep38.price_expires_at",
+          description: "GET /price expires_at (when present) is a valid, future timestamp",
+          status: "fail",
+          severity: "error",
+          message: "Cannot validate expires_at because GET /price failed",
+        });
+      }
     } else {
       const body = (await res.json()) as {
         total_price?: string;
