@@ -27,14 +27,8 @@ describe("SEP-10 negative-case challenge validation", () => {
     );
   }
 
-  it("passes when anchor correctly rejects all four invalid challenge types with HTTP 400", async () => {
-    mockFetchResponse({
-      ok: false,
-      status: 400,
-      json: async () => ({ error: "Invalid challenge: bad signature or timebounds" }),
-    } as Response);
-
-    const results = await runSep10NegativeChecks({
+  function runChecks() {
+    return runSep10NegativeChecks({
       webAuthEndpoint,
       domain,
       network: "testnet",
@@ -42,6 +36,20 @@ describe("SEP-10 negative-case challenge validation", () => {
       challengeXdr: makeBaseChallenge(),
       clientKeypair,
     });
+  }
+
+  it("passes when the anchor cites the condition actually under test", async () => {
+    // Reason mentions both expiry and the network passphrase, so both reason-checked
+    // cases can confirm the condition they test was evaluated.
+    mockFetchResponse({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: "Challenge transaction has expired and its network passphrase is invalid",
+      }),
+    } as Response);
+
+    const results = await runChecks();
 
     expect(results.length).toBe(4);
     const expiredCheck = results.find((r) => r.id === "sep10.negative.expired");
@@ -50,16 +58,80 @@ describe("SEP-10 negative-case challenge validation", () => {
     const missingSigCheck = results.find((r) => r.id === "sep10.negative.missing_client_sig");
 
     expect(expiredCheck?.status).toBe("pass");
-    expect(expiredCheck?.message).toContain("Anchor correctly rejected expired challenge with HTTP 400");
+    expect(expiredCheck?.message).toContain("citing challenge expiry");
 
     expect(wrongNetCheck?.status).toBe("pass");
-    expect(wrongNetCheck?.message).toContain("Anchor correctly rejected wrong-network challenge with HTTP 400");
+    expect(wrongNetCheck?.message).toContain("citing network passphrase validation");
 
+    // Cases that reuse the anchor's real signed challenge stay conclusive on any 4xx.
     expect(tamperedCheck?.status).toBe("pass");
     expect(tamperedCheck?.message).toContain("Anchor correctly rejected tampered challenge payload with HTTP 400");
 
     expect(missingSigCheck?.status).toBe("pass");
     expect(missingSigCheck?.message).toContain("Anchor correctly rejected challenge without client signature with HTTP 400");
+  });
+
+  it("warns instead of passing when the anchor short-circuits on source account", async () => {
+    // Verbatim rejection observed from testanchor.stellar.org: the anchor rejects the
+    // forged challenge on source-account mismatch and never evaluates timebounds or
+    // network passphrase. Reporting this as a pass would be a false pass.
+    mockFetchResponse({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: "Transaction source account is not equal to server's account.",
+      }),
+    } as Response);
+
+    const results = await runChecks();
+
+    const expiredCheck = results.find((r) => r.id === "sep10.negative.expired");
+    expect(expiredCheck?.status).toBe("warn");
+    expect(expiredCheck?.severity).toBe("warning");
+    expect(expiredCheck?.message).toContain("Transaction source account is not equal");
+    expect(expiredCheck?.message).toContain("challenge expiry was NOT verified");
+
+    const wrongNetCheck = results.find((r) => r.id === "sep10.negative.wrong_network");
+    expect(wrongNetCheck?.status).toBe("warn");
+    expect(wrongNetCheck?.severity).toBe("warning");
+    expect(wrongNetCheck?.message).toContain("network passphrase validation was NOT verified");
+
+    // The two conclusive cases are unaffected by reason analysis.
+    expect(results.find((r) => r.id === "sep10.negative.tampered_payload")?.status).toBe("pass");
+    expect(results.find((r) => r.id === "sep10.negative.missing_client_sig")?.status).toBe("pass");
+  });
+
+  it("warns when the anchor rejects with no error message at all", async () => {
+    mockFetchResponse({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+    } as Response);
+
+    const results = await runChecks();
+
+    const expiredCheck = results.find((r) => r.id === "sep10.negative.expired");
+    expect(expiredCheck?.status).toBe("warn");
+    expect(expiredCheck?.message).toContain("gave no error message");
+    expect(expiredCheck?.message).toContain("challenge expiry was NOT verified");
+
+    const wrongNetCheck = results.find((r) => r.id === "sep10.negative.wrong_network");
+    expect(wrongNetCheck?.status).toBe("warn");
+    expect(wrongNetCheck?.message).toContain("gave no error message");
+  });
+
+  it("reads the rejection reason from a message field when error is absent", async () => {
+    mockFetchResponse({
+      ok: false,
+      status: 400,
+      json: async () => ({ message: "challenge transaction is expired" }),
+    } as Response);
+
+    const results = await runChecks();
+
+    const expiredCheck = results.find((r) => r.id === "sep10.negative.expired");
+    expect(expiredCheck?.status).toBe("pass");
+    expect(expiredCheck?.message).toContain("citing challenge expiry");
   });
 
   it("fails as AUTHENTICATION BYPASS when anchor wrongly accepts expired challenge", async () => {
@@ -148,6 +220,20 @@ describe("SEP-10 negative-case challenge validation", () => {
     expect(missingSigCheck?.status).toBe("fail");
     expect(missingSigCheck?.severity).toBe("error");
     expect(missingSigCheck?.message).toContain("AUTHENTICATION BYPASS: Anchor accepted challenge without client signature");
+  });
+
+  it("fails when the anchor returns a 5xx instead of rejecting with a 4xx", async () => {
+    mockFetchResponse({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: "upstream unavailable" }),
+    } as Response);
+
+    const results = await runChecks();
+
+    const expiredCheck = results.find((r) => r.id === "sep10.negative.expired");
+    expect(expiredCheck?.status).toBe("fail");
+    expect(expiredCheck?.message).toContain("expected HTTP 4xx rejection");
   });
 
   it("distinguishes network errors and timeouts from rejections", async () => {
