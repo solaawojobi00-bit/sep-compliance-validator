@@ -355,4 +355,72 @@ collateral_address_signatures = ["sig1"]
     expect(check?.message).toContain("CURRENCIES[0] (USDC)");
     expect(check?.message).toContain("collateral_address_signatures length (1) must match collateral_addresses length (2)");
   });
+
+  it("passes native asset without issuer or contract", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validIssuer}"
+
+[[CURRENCIES]]
+code = "native"
+status = "test"
+is_asset_anchored = false
+anchor_asset_type = "crypto"
+desc = "XLM, the native asset of the Stellar network."
+`;
+    const { results } = parseStellarToml(rawToml);
+    const issuerOrContract = results.find(
+      (r) => r.id === "sep1.currencies.issuer_or_contract",
+    );
+    expect(issuerOrContract).toBeUndefined();
+
+    const validCheck = results.find((r) => r.id === "sep1.currencies.valid");
+    expect(validCheck?.status).toBe("pass");
+  });
+
+  it("warns when native asset declares an issuer but still passes", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validIssuer}"
+
+[[CURRENCIES]]
+code = "native"
+issuer = "${validIssuer}"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const warnCheck = results.find(
+      (r) => r.id === "sep1.currencies.native_issuer",
+    );
+    expect(warnCheck?.status).toBe("warn");
+    expect(warnCheck?.message).toContain("redundant");
+
+    const validCheck = results.find((r) => r.id === "sep1.currencies.valid");
+    expect(validCheck?.status).toBe("pass");
+  });
+
+  it("passes native asset alongside issued assets in one toml", () => {
+    const rawToml = `
+VERSION = "2.0.0"
+SIGNING_KEY = "${validIssuer}"
+
+[[CURRENCIES]]
+code = "USDC"
+issuer = "${validIssuer}"
+
+[[CURRENCIES]]
+code = "native"
+
+[[CURRENCIES]]
+code = "BOND"
+contract = "${validContract}"
+`;
+    const { results } = parseStellarToml(rawToml);
+    const failures = results.filter(
+      (r) => r.id.startsWith("sep1.currencies") && r.status === "fail",
+    );
+    expect(failures).toHaveLength(0);
+
+    const validChecks = results.filter((r) => r.id === "sep1.currencies.valid");
+    expect(validChecks).toHaveLength(3);
+  });
 });
