@@ -348,4 +348,13 @@ WEB_AUTH_ENDPOINT = "example.com/auth"
     expect(results[0].status).toBe("fail");
     expect(results[0].message).toContain("Simulated unexpected crash");
   });
+
+  it("guardChecker falls back to String(err) when the thrown value has no message property", async () => {
+    const results = await guardChecker("sep10", "Run SEP-10 flow", async () => {
+      throw "raw string failure";
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].message).toContain("raw string failure");
+  });
 });
