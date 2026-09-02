@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithTimeout, HttpError, isVerbose, setVerbose } from "../src/core/http.js";
+import {
+  fetchWithTimeout,
+  formatErrorDetail,
+  HttpError,
+  isVerbose,
+  setVerbose,
+} from "../src/core/http.js";
 
 describe("core/http", () => {
   afterEach(() => {
@@ -47,6 +53,82 @@ describe("core/http", () => {
     );
   });
 
+  it("surfaces mapped cause ENOTFOUND with explanation and details", async () => {
+    global.fetch = vi.fn(async () => {
+      const cause = new Error("getaddrinfo ENOTFOUND bad.domain");
+      (cause as any).code = "ENOTFOUND";
+      const err = new TypeError("fetch failed");
+      (err as any).cause = cause;
+      throw err;
+    });
+
+    await expect(fetchWithTimeout("https://bad.domain/stellar.toml")).rejects.toThrow(
+      "Request to https://bad.domain/stellar.toml failed: DNS lookup failed; the domain does not resolve (getaddrinfo ENOTFOUND bad.domain)",
+    );
+  });
+
+  it("surfaces mapped cause ECONNREFUSED with explanation and code", async () => {
+    global.fetch = vi.fn(async () => {
+      const cause = new Error("connect ECONNREFUSED 127.0.0.1:80");
+      (cause as any).code = "ECONNREFUSED";
+      const err = new TypeError("fetch failed");
+      (err as any).cause = cause;
+      throw err;
+    });
+
+    await expect(fetchWithTimeout("https://localhost/api")).rejects.toThrow(
+      "Request to https://localhost/api failed: connection refused (connect ECONNREFUSED 127.0.0.1:80)",
+    );
+  });
+
+  it("surfaces TLS certificate cause CERT_HAS_EXPIRED with explanation and code", async () => {
+    global.fetch = vi.fn(async () => {
+      const cause = new Error("certificate has expired");
+      (cause as any).code = "CERT_HAS_EXPIRED";
+      const err = new TypeError("fetch failed");
+      (err as any).cause = cause;
+      throw err;
+    });
+
+    await expect(fetchWithTimeout("https://expired.example.com/stellar.toml")).rejects.toThrow(
+      "Request to https://expired.example.com/stellar.toml failed: certificate has expired (CERT_HAS_EXPIRED)",
+    );
+  });
+
+  it("surfaces unmapped cause retaining raw code and message rather than bare fetch failed", async () => {
+    global.fetch = vi.fn(async () => {
+      const cause = new Error("No route to host");
+      (cause as any).code = "EHOSTUNREACH";
+      const err = new TypeError("fetch failed");
+      (err as any).cause = cause;
+      throw err;
+    });
+
+    await expect(fetchWithTimeout("https://unreachable.example.com")).rejects.toThrow(
+      "Request to https://unreachable.example.com failed: EHOSTUNREACH: No route to host",
+    );
+  });
+
+  it("inspects AggregateError cause and surfaces first error", async () => {
+    global.fetch = vi.fn(async () => {
+      const causeErr = new Error("getaddrinfo ENOTFOUND fail.org");
+      (causeErr as any).code = "ENOTFOUND";
+      const aggErr = new AggregateError([causeErr], "Multiple connection failures");
+      const err = new TypeError("fetch failed");
+      (err as any).cause = aggErr;
+      throw err;
+    });
+
+    await expect(fetchWithTimeout("https://fail.org")).rejects.toThrow(
+      "Request to https://fail.org failed: DNS lookup failed; the domain does not resolve (getaddrinfo ENOTFOUND fail.org)",
+    );
+  });
+
+  it("formats string cause correctly", () => {
+    const err = { cause: "Socket closed abruptly" };
+    expect(formatErrorDetail(err)).toBe("Socket closed abruptly");
+  });
+
   it("HttpError has correct name and message", () => {
     const error = new HttpError("Custom HTTP error");
     expect(error.name).toBe("HttpError");
@@ -71,12 +153,16 @@ describe("core/http", () => {
     expect(calls).toContain("[http] < 200 OK");
   });
 
-  it("logs error to stderr when verbose is true and fetch fails", async () => {
+  it("logs error with cause to stderr when verbose is true and fetch fails", async () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     setVerbose(true);
 
     global.fetch = vi.fn(async () => {
-      throw new Error("Connection refused");
+      const cause = new Error("connect ECONNREFUSED 127.0.0.1:80");
+      (cause as any).code = "ECONNREFUSED";
+      const err = new TypeError("fetch failed");
+      (err as any).cause = cause;
+      throw err;
     });
 
     try {
@@ -87,6 +173,6 @@ describe("core/http", () => {
 
     const calls = stderrSpy.mock.calls.map((c) => c[0].toString()).join("");
     expect(calls).toContain("[http] > GET https://example.com/error-test");
-    expect(calls).toContain("[http] ! error: Connection refused");
+    expect(calls).toContain("[http] ! error: connection refused (connect ECONNREFUSED 127.0.0.1:80)");
   });
 });
