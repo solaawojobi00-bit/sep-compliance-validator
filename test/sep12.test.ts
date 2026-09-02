@@ -175,6 +175,138 @@ describe("runSep12Checks", () => {
     expect(putCheck?.status).toBe("fail");
   });
 
+  it("passes PUT /customer when response contains only id without status and lets GET proceed", async () => {
+    const customerId = "cust_only_id";
+    let getCalled = false;
+
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address === "not-an-email-address") {
+          return { ok: false, status: 400 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: customerId,
+          }),
+        } as Response;
+      }
+
+      if (url === `https://kyc.example.com/customer?id=${customerId}`) {
+        getCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: customerId,
+            status: "ACCEPTED",
+          }),
+        } as Response;
+      }
+
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 200 } as Response;
+      }
+
+      throw new Error(`Unexpected request to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const putCheck = results.find((r) => r.id === "sep12.put_customer");
+    expect(putCheck?.status).toBe("pass");
+    expect(putCheck?.message).toContain(customerId);
+
+    const getCheck = results.find((r) => r.id === "sep12.get_customer");
+    expect(getCheck?.status).toBe("pass");
+    expect(getCalled).toBe(true);
+
+    const deleteCheck = results.find((r) => r.id === "sep12.delete_customer");
+    expect(deleteCheck?.status).toBe("pass");
+  });
+
+  it("captures customer id for GET and teardown even when PUT returns non-standard status", async () => {
+    let getUrlCalled: string | undefined;
+    let deleteUrlCalled: string | undefined;
+
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cust_with_bad_status", status: "UNKNOWN_STATUS" }),
+        } as Response;
+      }
+      if (url.includes("/customer?id=cust_with_bad_status")) {
+        getUrlCalled = url;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "cust_with_bad_status", status: "ACCEPTED" }),
+        } as Response;
+      }
+      if (init?.method === "DELETE") {
+        deleteUrlCalled = url;
+        return { ok: true, status: 200 } as Response;
+      }
+      return { ok: false, status: 400 } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const putCheck = results.find((r) => r.id === "sep12.put_customer");
+    expect(putCheck?.status).toBe("fail");
+
+    const getCheck = results.find((r) => r.id === "sep12.get_customer");
+    expect(getCheck?.status).toBe("pass");
+    expect(getUrlCalled).toBe("https://kyc.example.com/customer?id=cust_with_bad_status");
+
+    expect(deleteUrlCalled).toContain("cust_with_bad_status");
+  });
+
+  it("skips GET check with clear message when PUT response has no customer id", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: "ACCEPTED" }),
+        } as Response;
+      }
+      return { ok: false, status: 400 } as Response;
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const putCheck = results.find((r) => r.id === "sep12.put_customer");
+    expect(putCheck?.status).toBe("fail");
+    expect(putCheck?.message).toContain("missing or empty customer id");
+
+    const getCheck = results.find((r) => r.id === "sep12.get_customer");
+    expect(getCheck?.status).toBe("fail");
+    expect(getCheck?.message).toContain("did not return a customer id");
+  });
+
   it("fails when PUT /customer silently accepts malformed email_address", async () => {
     global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString();
