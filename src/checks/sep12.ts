@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
 import type { StellarToml } from "./sep1.js";
+import { validateSep12Fields } from "./sep12-fields.js";
 
 export interface Sep12Options {
   domain: string;
@@ -192,7 +193,12 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
           message: `GET ${getUrl} returned HTTP ${getRes.status}`,
         });
       } else {
-        const body = (await getRes.json()) as { id?: string; status?: string };
+        const body = (await getRes.json()) as {
+          id?: string;
+          status?: string;
+          fields?: unknown;
+          provided_fields?: unknown;
+        };
         const hasMatchingId = body.id === customerId;
         const isValidStatus =
           typeof body.status === "string" &&
@@ -215,6 +221,8 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
             message: `GET /customer returned consistent record with id ${body.id} and status ${body.status}`,
           });
         }
+
+        validateSep12Fields(body.fields, body.provided_fields, body.status, results);
       }
     } catch (err) {
       results.push({

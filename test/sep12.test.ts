@@ -508,5 +508,102 @@ describe("runSep12Checks", () => {
     expect(capturedBody.last_name).toMatch(/^Run-[a-f0-9]{8}$/);
     expect(capturedBody.email_address).toMatch(/^sepvalidator-[a-f0-9]{8}@invalid\.test$/);
   });
+
+  it("surfaces fields/provided_fields findings from the GET /customer response", async () => {
+    const customerId = "cust_with_fields";
+
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address === "not-an-email-address") {
+          return { ok: false, status: 400 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: customerId, status: "NEEDS_INFO" }),
+        } as Response;
+      }
+
+      if (url === `https://kyc.example.com/customer?id=${customerId}`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: customerId,
+            status: "NEEDS_INFO",
+            fields: {
+              email_address: { type: "string", description: "Email address" },
+              made_up_field: { type: "string", description: "Anchor-specific" },
+              bad_field: { type: "not-a-real-type", description: "Bad type" },
+            },
+          }),
+        } as Response;
+      }
+
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 200 } as Response;
+      }
+
+      throw new Error(`Unexpected request to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    expect(results.some((r) => r.id === "sep12.fields.unknown_name" && r.message.includes("made_up_field"))).toBe(
+      true,
+    );
+    expect(results.some((r) => r.id === "sep12.fields.type" && r.message.includes("bad_field"))).toBe(true);
+    expect(results.some((r) => r.id === "sep12.fields.needs_info_empty")).toBe(false);
+  });
+
+  it("fails when GET /customer reports NEEDS_INFO with no fields object", async () => {
+    const customerId = "cust_needs_info_empty";
+
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://kyc.example.com/customer" && init?.method === "PUT") {
+        const body = JSON.parse(init.body as string);
+        if (body.email_address === "not-an-email-address") {
+          return { ok: false, status: 400 } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: customerId, status: "NEEDS_INFO" }),
+        } as Response;
+      }
+
+      if (url === `https://kyc.example.com/customer?id=${customerId}`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: customerId, status: "NEEDS_INFO" }),
+        } as Response;
+      }
+
+      if (init?.method === "DELETE") {
+        return { ok: true, status: 200 } as Response;
+      }
+
+      throw new Error(`Unexpected request to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const results = await runSep12Checks({
+      domain,
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const needsInfoCheck = results.find((r) => r.id === "sep12.fields.needs_info_empty");
+    expect(needsInfoCheck?.status).toBe("fail");
+  });
 });
 
