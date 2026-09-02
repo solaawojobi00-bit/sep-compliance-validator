@@ -141,7 +141,19 @@ export function validateCurrencies(
       }
     }
 
+    const isNative = c.code === "native";
+
     // 2. issuer / contract
+    if (isNative && c.issuer !== undefined) {
+      results.push({
+        id: "sep1.currencies.native_issuer",
+        description: "Native asset should not declare issuer",
+        status: "warn",
+        severity: "warning",
+        message: `${label}: native asset (XLM) has no issuer; declaring 'issuer' is redundant`,
+      });
+    }
+
     if (c.issuer !== undefined) {
       if (typeof c.issuer !== "string" || !StrKey.isValidEd25519PublicKey(c.issuer)) {
         results.push({
@@ -168,7 +180,7 @@ export function validateCurrencies(
       }
     }
 
-    if (c.code !== undefined && !c.contract && !c.issuer) {
+    if (c.code !== undefined && !isNative && !c.contract && !c.issuer) {
       results.push({
         id: "sep1.currencies.issuer_or_contract",
         description: "Currency issuer or contract required for Stellar assets",
