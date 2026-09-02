@@ -22,6 +22,7 @@ export type {
 // SEP-12
 export { runSep12Checks } from "./checks/sep12.js";
 export type { Sep12Options } from "./checks/sep12.js";
+export { validateSep12Fields, SEP9_STANDARD_FIELDS } from "./checks/sep12-fields.js";
 
 // SEP-24
 export {
