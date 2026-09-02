@@ -126,29 +126,40 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
     } else {
       const body = (await putRes.json()) as { id?: string; status?: string };
       const hasId = typeof body.id === "string" && body.id.trim().length > 0;
-      const isValidStatus =
-        typeof body.status === "string" &&
-        VALID_SEP12_STATUSES.includes(body.status as Sep12Status);
+      if (hasId) {
+        customerId = body.id!.trim();
+        createdCustomerIds.add(customerId);
+      }
 
-      if (!hasId || !isValidStatus) {
+      const hasInvalidStatus =
+        body.status !== undefined &&
+        (typeof body.status !== "string" ||
+          !VALID_SEP12_STATUSES.includes(body.status as Sep12Status));
+
+      if (!hasId) {
         results.push({
           id: "sep12.put_customer",
           description: "PUT /customer accepts minimal valid KYC field set",
           status: "fail",
           severity: "error",
-          message: `PUT response invalid: id=${body.id}, status=${body.status} (expected valid id and status in ${VALID_SEP12_STATUSES.join(", ")})`,
+          message: `PUT response invalid: missing or empty customer id (got id=${body.id})`,
+        });
+      } else if (hasInvalidStatus) {
+        results.push({
+          id: "sep12.put_customer",
+          description: "PUT /customer accepts minimal valid KYC field set",
+          status: "fail",
+          severity: "error",
+          message: `PUT response invalid: status "${body.status}" is not one of ${VALID_SEP12_STATUSES.join(", ")}`,
         });
       } else {
-        customerId = body.id;
-        if (body.id) {
-          createdCustomerIds.add(body.id);
-        }
+        const statusMsg = body.status ? ` with status ${body.status}` : "";
         results.push({
           id: "sep12.put_customer",
           description: "PUT /customer accepts minimal valid KYC field set",
           status: "pass",
           severity: "error",
-          message: `PUT /customer returned customer id (${body.id}) with status ${body.status}`,
+          message: `PUT /customer returned customer id (${customerId})${statusMsg}`,
         });
       }
     }
