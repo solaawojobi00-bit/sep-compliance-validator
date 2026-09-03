@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Report } from "../src/core/report.js";
+import { REPORT_SCHEMA_VERSION, type Report } from "../src/core/report.js";
 import { printHtml, renderHtml } from "../src/output/html.js";
 
 describe("HTML output renderer", () => {
   const sampleReport: Report = {
+    schemaVersion: REPORT_SCHEMA_VERSION,
     domain: "anchor.example.com",
     network: "testnet",
     timestamp: "2026-09-01T12:00:00.000Z",
@@ -56,6 +57,13 @@ describe("HTML output renderer", () => {
     expect(html).toContain("Endpoint returned HTTP 500");
   });
 
+  it("shows the schema version in the metadata header", () => {
+    const html = renderHtml(sampleReport);
+
+    expect(html).toContain("<strong>Schema:</strong>");
+    expect(html).toContain(`v${REPORT_SCHEMA_VERSION}`);
+  });
+
   it("produces valid HTML with doctype and balanced tags", () => {
     const html = renderHtml(sampleReport);
 
@@ -76,6 +84,7 @@ describe("HTML output renderer", () => {
 
   it("escapes special characters to prevent HTML injection", () => {
     const reportWithMaliciousData: Report = {
+      schemaVersion: REPORT_SCHEMA_VERSION,
       domain: "<script>alert('xss')</script>",
       network: "testnet",
       timestamp: "2026-09-01T12:00:00.000Z",

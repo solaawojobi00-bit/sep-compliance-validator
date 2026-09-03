@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { buildProgram, runCheckAction, type CheckCommandOptions } from "../src/cli.js";
 import { parseStellarToml } from "../src/checks/sep1.js";
 import { guardChecker } from "../src/core/guard.js";
+import { REPORT_SCHEMA_VERSION } from "../src/core/report.js";
 
 const execAsync = promisify(exec);
 const cliPath = "node dist/cli.js";
@@ -28,6 +29,19 @@ describe("runCheckAction in-process branch coverage", () => {
     format: "json",
     timeout: "10000",
   };
+
+  it("stamps every report it builds with the current schemaVersion", async () => {
+    global.fetch = vi.fn(async () => {
+      throw new Error("network disabled for this test");
+    }) as unknown as typeof fetch;
+
+    const report = await runCheckAction("example.com", baseOpts);
+
+    // Stamped even on a run where every check failed — a stored report is only useful
+    // for migration if the version is unconditional.
+    expect(report?.schemaVersion).toBe(REPORT_SCHEMA_VERSION);
+    expect(Number.isInteger(report?.schemaVersion)).toBe(true);
+  });
 
   it("returns undefined and sets exitCode 2 for invalid format", async () => {
     const report = await runCheckAction("example.com", { ...baseOpts, format: "xml" });

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Report } from "../src/core/report.js";
+import { REPORT_SCHEMA_VERSION, type Report } from "../src/core/report.js";
 import { printJson, renderJson } from "../src/output/json.js";
 
 describe("output/json", () => {
   const mockReport: Report = {
+    schemaVersion: REPORT_SCHEMA_VERSION,
     domain: "anchor.example.com",
     network: "mainnet",
     timestamp: "2026-09-01T15:30:00.000Z",
@@ -26,6 +27,16 @@ describe("output/json", () => {
     expect(parsed.network).toBe(mockReport.network);
     expect(parsed.timestamp).toBe(mockReport.timestamp);
     expect(parsed.results).toEqual(mockReport.results);
+  });
+
+  it("renderJson emits schemaVersion as an integer so stored reports identify their schema", () => {
+    const parsed = JSON.parse(renderJson(mockReport));
+    expect(parsed.schemaVersion).toBe(REPORT_SCHEMA_VERSION);
+    expect(typeof parsed.schemaVersion).toBe("number");
+    expect(Number.isInteger(parsed.schemaVersion)).toBe(true);
+    // A stored report is worthless for migration if the version can be mistaken for
+    // absent, so guard the one value that would serialize ambiguously.
+    expect(parsed.schemaVersion).toBeGreaterThanOrEqual(1);
   });
 
   it("printJson prints serialized JSON to console.log", () => {

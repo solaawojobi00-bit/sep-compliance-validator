@@ -51,5 +51,5 @@ export type {
   ReportSummary,
   Severity,
 } from "./core/report.js";
-export { summarize } from "./core/report.js";
+export { REPORT_SCHEMA_VERSION, summarize } from "./core/report.js";
 export { guardChecker } from "./core/guard.js";
