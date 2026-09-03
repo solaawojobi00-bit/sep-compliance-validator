@@ -64,16 +64,30 @@ The automated runner will cease checking the domain and archive or hide historic
 ## 4. Storage for Historical Results
 
 ### 4.1 Storage Unit
-Storage directly uses the canonical `Report` data structure defined in `src/core/report.ts`:
+Storage directly uses the canonical, **versioned** `Report` data structure defined in
+`src/core/report.ts`:
 
 ```typescript
 export interface Report {
+  /** Schema version of this report; see REPORT_SCHEMA_VERSION. */
+  schemaVersion: number;
   domain: string;
   network: "testnet" | "mainnet";
   timestamp: string;
   results: CheckResult[];
 }
 ```
+
+`schemaVersion` is a monotonic integer, bumped only when a change would break a parser
+written against the previous version (see the *Report schema versioning* section of
+[`ARCHITECTURE.md`](../ARCHITECTURE.md) for the bump policy).
+
+**The runner must validate `schemaVersion` on read.** Detail snapshots are retained for 90
+days and rolled-up summaries for a year, so the archive will outlive schema changes. A
+stored report whose `schemaVersion` exceeds the reader's supported version must be skipped
+or migrated explicitly — never parsed optimistically, since that is how a year of history
+turns into silently wrong dashboard data. A report with no `schemaVersion` at all predates
+this field and should be treated as unversioned legacy data.
 
 ### 4.2 Storage Layout & Artifact Strategy
 To eliminate server hosting costs and retain high availability, results will be stored as static JSON artifacts published to GitHub Pages or Cloudflare R2 / S3:

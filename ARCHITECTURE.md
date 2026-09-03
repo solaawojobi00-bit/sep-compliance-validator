@@ -96,6 +96,29 @@ of `CheckResult` objects (`{ id, description, status: "pass" | "fail" | "warn", 
 The CLI action aggregates all results into a unified `Report` object before dispatching
 to the chosen formatter.
 
+### Report schema versioning
+
+Every `Report` carries a `schemaVersion`, exported as `REPORT_SCHEMA_VERSION` from
+`src/core/report.ts`. It is a monotonic integer rather than a semver string: the only
+question a consumer of a stored report needs answered is "can I parse this?", and one
+comparison settles it.
+
+Reports are persisted — the GitHub Action uploads the JSON report as a build artifact, and
+the Phase 3 dashboard archives raw `Report` JSON with a 90-day detail retention — so a
+consumer reading a report it did not generate needs a way to detect a schema mismatch
+rather than silently mis-parsing it.
+
+**Bump `REPORT_SCHEMA_VERSION`** when a change would break a parser written against the
+previous version:
+
+- removing or renaming a field on `Report` or `CheckResult`
+- changing an existing field's type
+- adding a member to the `CheckStatus` or `Severity` unions, which a consumer handling
+  them exhaustively would not recognise
+
+**Do not bump it** for a purely additive optional field. Well-behaved parsers ignore
+unknown keys, and bumping would force a pointless migration on every consumer.
+
 ## Phase 3 / Remaining Work
 
 - **SEP-6 Programmatic Flows:** Validation of non-interactive deposit and withdrawal flows (deferred due to real/test fund movement considerations).

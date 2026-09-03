@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Report } from "../src/core/report.js";
+import { REPORT_SCHEMA_VERSION, type Report } from "../src/core/report.js";
 import { printTable, renderTable } from "../src/output/table.js";
 
 describe("output/table", () => {
   const mockReport: Report = {
+    schemaVersion: REPORT_SCHEMA_VERSION,
     domain: "anchor.test.org",
     network: "testnet",
     timestamp: "2026-09-01T12:00:00.000Z",

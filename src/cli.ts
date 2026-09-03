@@ -10,7 +10,7 @@ import { runSep38Checks } from "./checks/sep38.js";
 import { guardChecker } from "./core/guard.js";
 import { setVerbose } from "./core/http.js";
 import type { CheckResult, Report } from "./core/report.js";
-import { summarize } from "./core/report.js";
+import { REPORT_SCHEMA_VERSION, summarize } from "./core/report.js";
 import { renderHtml } from "./output/html.js";
 import { renderJson } from "./output/json.js";
 import { renderTable } from "./output/table.js";
@@ -296,6 +296,7 @@ export async function runCheckAction(
     });
   } finally {
     const report: Report = {
+      schemaVersion: REPORT_SCHEMA_VERSION,
       domain,
       network,
       timestamp: new Date().toISOString(),

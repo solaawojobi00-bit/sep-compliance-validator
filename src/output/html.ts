@@ -134,7 +134,8 @@ export function renderHtml(report: Report): string {
       <div class="meta">
         <strong>Domain:</strong> ${escapeHtml(report.domain)} &bull;
         <strong>Network:</strong> ${escapeHtml(report.network)} &bull;
-        <strong>Generated:</strong> ${escapeHtml(report.timestamp)}
+        <strong>Generated:</strong> ${escapeHtml(report.timestamp)} &bull;
+        <strong>Schema:</strong> v${escapeHtml(String(report.schemaVersion))}
       </div>
     </header>
 
