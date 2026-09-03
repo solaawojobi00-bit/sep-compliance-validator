@@ -288,6 +288,8 @@ const LIST_CHECK_DESCRIPTIONS = {
   "sep24.transactions_list_records":
     "Every GET /transactions record has a non-empty id, a valid SEP-24 status, and kind deposit or withdrawal",
   "sep24.transactions_list_asset_filter": "GET /transactions honours the asset_code filter",
+  "sep24.transactions_list_asset_filter_excludes":
+    "GET /transactions filtered by a different asset_code excludes the transaction created under the first",
   "sep24.transactions_list_contains_created":
     "Transaction created by the interactive check this run appears in GET /transactions",
   "sep24.transactions_list_limit": "GET /transactions?limit=1 returns at most one record",
@@ -393,9 +395,14 @@ function matchesAssetCode(
  * proves the list endpoint and the single-transaction lookup agree. When the interactive
  * POST failed there is no id to look for, so that one check degrades to a warn instead of
  * reporting a failure the anchor did not cause.
+ *
+ * `exclusionAssetCode` is a second enabled asset code from /info, different from
+ * `assetCode`, used to assert the filter by absence — see the exclusion check below.
+ * Undefined when /info advertised only one enabled asset, or could not be read.
  */
 async function checkTransactionList(
   assetCode: string,
+  exclusionAssetCode: string | undefined,
   createdTransactionId: string | undefined,
   baseUrl: string,
   authHeader: Record<string, string>,
@@ -548,7 +555,93 @@ async function checkTransactionList(
     );
   }
 
-  // 2. limit=1 must cap the response at a single record.
+  // 2. Asset-filter exclusion. The positive check above can only reach a verdict when the
+  // returned records happen to carry an asset identifier, and SEP-24 mandates none: a
+  // freshly created transaction has no amounts yet, so it has no amount_in_asset /
+  // amount_out_asset either, and top-level asset_code is not in the spec. Against such an
+  // anchor the positive check is permanently inconclusive, and an anchor that ignores
+  // asset_code entirely goes uncaught.
+  //
+  // Absence is observable even when every record is anonymous. The transaction created
+  // under `assetCode` earlier in this run must not appear when the list is filtered by a
+  // different enabled asset; an anchor that ignores the filter returns it anyway.
+  //
+  // This relies on the transaction being a plain deposit created with a single asset_code
+  // and no quote_id, which is how requestInteractive posts it. A SEP-38-quoted transaction
+  // legitimately involves two assets (amount_in_asset: iso4217:USD, amount_out_asset:
+  // stellar:USDC:GA...) and could reasonably be returned under either code, so that
+  // assumption would not hold if this check were ever pointed at a quoted transaction.
+  const excludesId = "sep24.transactions_list_asset_filter_excludes";
+  const excludesDescription = LIST_CHECK_DESCRIPTIONS[excludesId];
+
+  if (!exclusionAssetCode) {
+    results.push({
+      id: excludesId,
+      description: excludesDescription,
+      status: "warn",
+      severity: "warning",
+      message: `Not exercised: /info advertised no enabled asset other than ${assetCode}, so there is no second asset to filter by (a single-asset anchor is legitimate)`,
+    });
+  } else if (!createdTransactionId) {
+    results.push({
+      id: excludesId,
+      description: excludesDescription,
+      status: "warn",
+      severity: "warning",
+      message:
+        "Skipped: no transaction id was produced by POST /transactions/deposit/interactive this run, so there is no transaction whose exclusion could be asserted",
+    });
+  } else {
+    const excludeUrl = `${baseUrl}/transactions?asset_code=${encodeURIComponent(exclusionAssetCode)}`;
+    try {
+      const res = await fetchWithTimeout(excludeUrl, { headers: { ...authHeader } }, timeoutMs);
+
+      if (!res.ok) {
+        results.push({
+          id: excludesId,
+          description: excludesDescription,
+          status: "fail",
+          severity: "error",
+          message: `GET ${excludeUrl} returned HTTP ${res.status}`,
+        });
+      } else {
+        const body = (await res.json()) as { transactions?: unknown };
+
+        if (!Array.isArray(body.transactions)) {
+          results.push({
+            id: excludesId,
+            description: excludesDescription,
+            status: "fail",
+            severity: "error",
+            message: `Response must be an object with a "transactions" array, got: ${JSON.stringify(body.transactions)}`,
+          });
+        } else {
+          const leaked = body.transactions.some(
+            (entry) => asRecord(entry)?.id === createdTransactionId,
+          );
+          results.push({
+            id: excludesId,
+            description: excludesDescription,
+            status: leaked ? "fail" : "pass",
+            severity: "error",
+            message: leaked
+              ? `asset_code filter ignored: transaction ${createdTransactionId}, created under asset_code=${assetCode} this run, is returned by GET /transactions?asset_code=${exclusionAssetCode}`
+              : `Transaction ${createdTransactionId}, created under asset_code=${assetCode}, is correctly absent from GET /transactions?asset_code=${exclusionAssetCode} (${body.transactions.length} record(s))`,
+          });
+        }
+      }
+    } catch (err) {
+      results.push({
+        id: excludesId,
+        description: excludesDescription,
+        status: "fail",
+        severity: "error",
+        message: (err as Error).message,
+      });
+    }
+  }
+
+  // 3. limit=1 must cap the response at a single record.
   try {
     const limitUrl = `${baseUrl}/transactions?asset_code=${encodeURIComponent(assetCode)}&limit=1`;
     const res = await fetchWithTimeout(limitUrl, { headers: { ...authHeader } }, timeoutMs);
@@ -599,7 +692,7 @@ async function checkTransactionList(
     });
   }
 
-  // 3. Negative: asset_code is a required parameter, so omitting it must be rejected.
+  // 4. Negative: asset_code is a required parameter, so omitting it must be rejected.
   // An anchor that answers 2xx anyway is lenient rather than dangerous — a wallet still
   // gets usable data — so this is reported at warning severity, unlike the auth bypass
   // below.
@@ -642,7 +735,7 @@ async function checkTransactionList(
     });
   }
 
-  // 4. Negative: /transactions serves user data, so SEP-24 requires the SEP-10 JWT
+  // 5. Negative: /transactions serves user data, so SEP-24 requires the SEP-10 JWT
   // ("/info should be unauthenticated, but all other endpoints will require a token").
   // Serving it without one leaks another account's history.
   try {
@@ -721,6 +814,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
 
   let depositAssetCode = "USDC";
   let withdrawAssetCode: string | undefined;
+  let exclusionAssetCode: string | undefined;
 
   // 1. GET /info endpoint check
   try {
@@ -805,6 +899,16 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
               withdrawAssetCode = enabledEntry[0];
             }
           }
+
+          // Pick a second enabled asset code, different from the one the deposit is
+          // created under, for the list-filter exclusion check. Deposit assets come first
+          // because they are the more natural pool, but a withdraw-only code is still a
+          // valid value to filter /transactions by. Undefined for a single-asset anchor,
+          // which the check reports as not exercised rather than as a failure.
+          exclusionAssetCode = allAssets
+            .filter(([, info]) => info.enabled !== false)
+            .map(([code]) => code)
+            .find((code) => code.toUpperCase() !== depositAssetCode.toUpperCase());
         }
       }
     }
@@ -908,6 +1012,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
   // is what makes the list/lookup cross-check meaningful.
   await checkTransactionList(
     depositAssetCode,
+    exclusionAssetCode,
     deposit.transactionId,
     baseUrl,
     authHeader,
