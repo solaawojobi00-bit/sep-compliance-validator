@@ -142,14 +142,16 @@ jobs:
         PASS: ${{ steps.smoke.outputs.pass }}
         FAIL: ${{ steps.smoke.outputs.fail }}
         WARN: ${{ steps.smoke.outputs.warn }}
+        EXIT_CODE: ${{ steps.smoke.outputs.exit-code }}
       run: |
         set -euo pipefail
-        echo "Outputs - Total: $TOTAL, Pass: $PASS, Fail: $FAIL, Warn: $WARN"
+        echo "Outputs - Total: $TOTAL, Pass: $PASS, Fail: $FAIL, Warn: $WARN, Exit: $EXIT_CODE"
         echo "Report Path: $REPORT_PATH"
         test -f "$REPORT_PATH"
         test "$TOTAL" -gt 0
         test "$PASS" = "$TOTAL"
         test "$FAIL" = "0"
+        test "$EXIT_CODE" = "0"
         # The counts must actually describe the report on disk, not just be non-empty.
         node -e '
           const { readFileSync } = require("node:fs");
@@ -208,10 +210,15 @@ jobs:
         OUTCOME: ${{ steps.smoke-fail.outcome }}
         FAIL: ${{ steps.smoke-fail.outputs.fail }}
         REPORT_PATH: ${{ steps.smoke-fail.outputs.report-path }}
+        EXIT_CODE: ${{ steps.smoke-fail.outputs.exit-code }}
       run: |
         set -euo pipefail
         # A green outcome here would mean the Action swallows a non-conformant anchor.
         test "$OUTCOME" = "failure"
         test "$FAIL" -gt 0
+        # Exactly 1: the anchor was judged non-conformant. A 2 would mean the Action
+        # built an invocation the CLI rejected, which fails the same way from outside
+        # but for an entirely different reason.
+        test "$EXIT_CODE" = "1"
         # ...and it must still produce a usable report on the way out.
         test -f "$REPORT_PATH"
