@@ -31,6 +31,15 @@ export const VALID_SEP24_STATUSES = [
 
 export type Sep24Status = (typeof VALID_SEP24_STATUSES)[number];
 
+/**
+ * SEP-24 defines exactly two transaction kinds: "kind | string | `deposit` or
+ * `withdrawal`". Asset-exchange flows reuse these two values rather than introducing
+ * `deposit-exchange`/`withdrawal-exchange`, so this list is complete.
+ */
+export const VALID_SEP24_KINDS = ["deposit", "withdrawal"] as const;
+
+export type Sep24Kind = (typeof VALID_SEP24_KINDS)[number];
+
 interface AssetInfo {
   enabled?: boolean;
   min_amount?: number;
@@ -265,6 +274,416 @@ async function checkTransactionStatus(
   }
 }
 
+interface Sep24TransactionRecord {
+  id?: unknown;
+  status?: unknown;
+  kind?: unknown;
+  asset_code?: unknown;
+  amount_in_asset?: unknown;
+  amount_out_asset?: unknown;
+}
+
+const LIST_CHECK_DESCRIPTIONS = {
+  "sep24.transactions_list": "GET /transactions returns an object containing a transactions array",
+  "sep24.transactions_list_records":
+    "Every GET /transactions record has a non-empty id, a valid SEP-24 status, and kind deposit or withdrawal",
+  "sep24.transactions_list_asset_filter": "GET /transactions honours the asset_code filter",
+  "sep24.transactions_list_contains_created":
+    "Transaction created by the interactive check this run appears in GET /transactions",
+  "sep24.transactions_list_limit": "GET /transactions?limit=1 returns at most one record",
+  "sep24.transactions_list_requires_asset_code":
+    "GET /transactions without the required asset_code parameter is rejected",
+  "sep24.transactions_list_unauthenticated": "GET /transactions without authentication is rejected",
+} as const;
+
+type ListCheckId = keyof typeof LIST_CHECK_DESCRIPTIONS;
+
+/** Pushes the same status/message under several list check ids (shared failure or skip). */
+function pushListResults(
+  ids: readonly ListCheckId[],
+  status: CheckResult["status"],
+  severity: CheckResult["severity"],
+  message: string,
+  results: CheckResult[],
+): void {
+  for (const id of ids) {
+    results.push({ id, description: LIST_CHECK_DESCRIPTIONS[id], status, severity, message });
+  }
+}
+
+/** Narrows one /transactions element to a record object, or undefined when malformed. */
+function asRecord(entry: unknown): Sep24TransactionRecord | undefined {
+  return typeof entry === "object" && entry !== null && !Array.isArray(entry)
+    ? (entry as Sep24TransactionRecord)
+    : undefined;
+}
+
+/** Describes every schema defect on one transaction record, or [] when it is conformant. */
+function describeRecordDefects(entry: unknown, index: number): string[] {
+  const record = asRecord(entry);
+  if (!record) {
+    return [`[${index}] must be a transaction object, got: ${JSON.stringify(entry)}`];
+  }
+
+  const defects: string[] = [];
+
+  if (typeof record.id !== "string" || record.id.trim().length === 0) {
+    defects.push(`[${index}] id must be a non-empty string, got: ${JSON.stringify(record.id)}`);
+  }
+  if (typeof record.status !== "string" || !VALID_SEP24_STATUSES.includes(record.status as Sep24Status)) {
+    defects.push(`[${index}] status not in SEP-24 enum, got: ${JSON.stringify(record.status)}`);
+  }
+  if (typeof record.kind !== "string" || !VALID_SEP24_KINDS.includes(record.kind as Sep24Kind)) {
+    defects.push(`[${index}] kind must be "deposit" or "withdrawal", got: ${JSON.stringify(record.kind)}`);
+  }
+
+  return defects;
+}
+
+/**
+ * Decides whether a transaction record belongs to `assetCode`.
+ *
+ * SEP-24 transaction objects carry no mandatory asset field: the code surfaces either in
+ * a top-level `asset_code` (widely emitted by anchors, not in the spec) or inside the
+ * SEP-38 asset identifiers `amount_in_asset`/`amount_out_asset` ("stellar:USDC:GA...",
+ * "iso4217:USD"). A record carrying none of them cannot be judged, so it is reported as
+ * inconclusive rather than as a filter violation.
+ */
+function matchesAssetCode(
+  record: Sep24TransactionRecord,
+  assetCode: string,
+): "match" | "mismatch" | "unknown" {
+  const wanted = assetCode.toUpperCase();
+  let sawIdentifier = false;
+
+  if (typeof record.asset_code === "string" && record.asset_code.trim().length > 0) {
+    sawIdentifier = true;
+    if (record.asset_code.toUpperCase() === wanted) {
+      return "match";
+    }
+  }
+
+  for (const field of ["amount_in_asset", "amount_out_asset"] as const) {
+    const value = record[field];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      continue;
+    }
+    sawIdentifier = true;
+    // SEP-38 identifiers are "<scheme>:<code>[:<issuer>]", so the code is the second
+    // segment. A bare code with no scheme is non-conformant here but is still matched, so
+    // that a merely sloppy anchor is not reported as a filter violation.
+    const segments = value.split(":");
+    const code = segments.length > 1 ? segments[1] : segments[0];
+    if (code && code.toUpperCase() === wanted) {
+      return "match";
+    }
+  }
+
+  return sawIdentifier ? "mismatch" : "unknown";
+}
+
+/**
+ * Validates GET /transactions (plural) — the endpoint a wallet uses to build a user's
+ * transaction history. Covers the response shape, per-record schema, the asset_code
+ * filter, the limit parameter, and the two negative cases (missing asset_code, missing
+ * JWT).
+ *
+ * `createdTransactionId` is the id returned by the deposit interactive POST earlier in
+ * the run. When present, its appearance in the list is the assertion with real teeth: it
+ * proves the list endpoint and the single-transaction lookup agree. When the interactive
+ * POST failed there is no id to look for, so that one check degrades to a warn instead of
+ * reporting a failure the anchor did not cause.
+ */
+async function checkTransactionList(
+  assetCode: string,
+  createdTransactionId: string | undefined,
+  baseUrl: string,
+  authHeader: Record<string, string>,
+  timeoutMs: number | undefined,
+  results: CheckResult[],
+): Promise<void> {
+  const derivedIds = [
+    "sep24.transactions_list_records",
+    "sep24.transactions_list_asset_filter",
+    "sep24.transactions_list_contains_created",
+  ] as const;
+  const listUrl = `${baseUrl}/transactions?asset_code=${encodeURIComponent(assetCode)}`;
+
+  // 1. Primary list request: shape, per-record schema, asset filter, cross-check.
+  try {
+    const res = await fetchWithTimeout(listUrl, { headers: { ...authHeader } }, timeoutMs);
+
+    if (!res.ok) {
+      pushListResults(
+        ["sep24.transactions_list", ...derivedIds],
+        "fail",
+        "error",
+        `GET ${listUrl} returned HTTP ${res.status}`,
+        results,
+      );
+    } else {
+      const body = (await res.json()) as { transactions?: unknown };
+      const transactions = body.transactions;
+
+      if (!Array.isArray(transactions)) {
+        pushListResults(
+          ["sep24.transactions_list", ...derivedIds],
+          "fail",
+          "error",
+          `Response must be an object with a "transactions" array, got: ${JSON.stringify(transactions)}`,
+          results,
+        );
+      } else {
+        const records: unknown[] = transactions;
+        results.push({
+          id: "sep24.transactions_list",
+          description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list"],
+          status: "pass",
+          severity: "error",
+          message: `GET /transactions?asset_code=${assetCode} returned a transactions array with ${records.length} record(s)`,
+        });
+
+        if (records.length === 0) {
+          // An anchor with no history for this account is legitimate, so the schema and
+          // filter checks have nothing to judge. The cross-check below still fails if a
+          // transaction was created this run and is missing from the list.
+          pushListResults(
+            ["sep24.transactions_list_records", "sep24.transactions_list_asset_filter"],
+            "warn",
+            "warning",
+            "Inconclusive: anchor returned an empty transactions array, so there are no records to validate",
+            results,
+          );
+        } else {
+          const defects = records.flatMap((entry, index) => describeRecordDefects(entry, index));
+          results.push({
+            id: "sep24.transactions_list_records",
+            description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_records"],
+            status: defects.length > 0 ? "fail" : "pass",
+            severity: "error",
+            message:
+              defects.length > 0
+                ? `${defects.length} schema defect(s) across ${records.length} record(s): ${defects.join("; ")}`
+                : `All ${records.length} record(s) have a non-empty id, a valid status, and a valid kind`,
+          });
+
+          const mismatches: string[] = [];
+          let unknownCount = 0;
+          records.forEach((entry, index) => {
+            const record = asRecord(entry);
+            if (!record) {
+              // A non-object element is already reported by the schema check above, and
+              // carries no asset identifier either, so it is inconclusive here.
+              unknownCount++;
+              return;
+            }
+
+            const verdict = matchesAssetCode(record, assetCode);
+            if (verdict === "mismatch") {
+              mismatches.push(
+                `[${index}] id=${String(record.id)} asset_code=${String(record.asset_code)} amount_in_asset=${String(record.amount_in_asset)}`,
+              );
+            } else if (verdict === "unknown") {
+              unknownCount++;
+            }
+          });
+
+          if (mismatches.length > 0) {
+            results.push({
+              id: "sep24.transactions_list_asset_filter",
+              description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_asset_filter"],
+              status: "fail",
+              severity: "error",
+              message: `${mismatches.length} record(s) do not match requested asset_code=${assetCode}: ${mismatches.join("; ")}`,
+            });
+          } else if (unknownCount === records.length) {
+            results.push({
+              id: "sep24.transactions_list_asset_filter",
+              description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_asset_filter"],
+              status: "warn",
+              severity: "warning",
+              message: `Inconclusive: none of the ${records.length} record(s) carry asset_code, amount_in_asset, or amount_out_asset, so the asset_code filter cannot be verified`,
+            });
+          } else {
+            results.push({
+              id: "sep24.transactions_list_asset_filter",
+              description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_asset_filter"],
+              status: "pass",
+              severity: "error",
+              message: `All identifiable record(s) match requested asset_code=${assetCode}${unknownCount > 0 ? ` (${unknownCount} record(s) carried no asset identifier)` : ""}`,
+            });
+          }
+        }
+
+        if (!createdTransactionId) {
+          results.push({
+            id: "sep24.transactions_list_contains_created",
+            description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_contains_created"],
+            status: "warn",
+            severity: "warning",
+            message:
+              "Skipped: no transaction id was produced by POST /transactions/deposit/interactive this run, so the list could not be cross-checked against the lookup",
+          });
+        } else {
+          const found = records.some((entry) => asRecord(entry)?.id === createdTransactionId);
+          results.push({
+            id: "sep24.transactions_list_contains_created",
+            description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_contains_created"],
+            status: found ? "pass" : "fail",
+            severity: "error",
+            message: found
+              ? `Transaction ${createdTransactionId} created this run is present in GET /transactions`
+              : `Transaction ${createdTransactionId} was created this run and is returned by GET /transaction?id=, but is absent from GET /transactions?asset_code=${assetCode} (${records.length} record(s)); the list and lookup endpoints disagree`,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    pushListResults(
+      ["sep24.transactions_list", ...derivedIds],
+      "fail",
+      "error",
+      (err as Error).message,
+      results,
+    );
+  }
+
+  // 2. limit=1 must cap the response at a single record.
+  try {
+    const limitUrl = `${baseUrl}/transactions?asset_code=${encodeURIComponent(assetCode)}&limit=1`;
+    const res = await fetchWithTimeout(limitUrl, { headers: { ...authHeader } }, timeoutMs);
+
+    if (!res.ok) {
+      results.push({
+        id: "sep24.transactions_list_limit",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_limit"],
+        status: "fail",
+        severity: "error",
+        message: `GET ${limitUrl} returned HTTP ${res.status}`,
+      });
+    } else {
+      const body = (await res.json()) as { transactions?: unknown };
+      if (!Array.isArray(body.transactions)) {
+        results.push({
+          id: "sep24.transactions_list_limit",
+          description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_limit"],
+          status: "fail",
+          severity: "error",
+          message: `Response must be an object with a "transactions" array, got: ${JSON.stringify(body.transactions)}`,
+        });
+      } else if (body.transactions.length > 1) {
+        results.push({
+          id: "sep24.transactions_list_limit",
+          description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_limit"],
+          status: "fail",
+          severity: "error",
+          message: `limit=1 was ignored: anchor returned ${body.transactions.length} records`,
+        });
+      } else {
+        results.push({
+          id: "sep24.transactions_list_limit",
+          description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_limit"],
+          status: "pass",
+          severity: "error",
+          message: `limit=1 honoured: anchor returned ${body.transactions.length} record(s)`,
+        });
+      }
+    }
+  } catch (err) {
+    results.push({
+      id: "sep24.transactions_list_limit",
+      description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_limit"],
+      status: "fail",
+      severity: "error",
+      message: (err as Error).message,
+    });
+  }
+
+  // 3. Negative: asset_code is a required parameter, so omitting it must be rejected.
+  // An anchor that answers 2xx anyway is lenient rather than dangerous — a wallet still
+  // gets usable data — so this is reported at warning severity, unlike the auth bypass
+  // below.
+  try {
+    const noAssetUrl = `${baseUrl}/transactions`;
+    const res = await fetchWithTimeout(noAssetUrl, { headers: { ...authHeader } }, timeoutMs);
+
+    if (res.ok) {
+      results.push({
+        id: "sep24.transactions_list_requires_asset_code",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_requires_asset_code"],
+        status: "fail",
+        severity: "warning",
+        message: `Anchor accepted GET /transactions with no asset_code (HTTP ${res.status}); SEP-24 lists asset_code as required`,
+      });
+    } else if (res.status >= 400 && res.status < 500) {
+      results.push({
+        id: "sep24.transactions_list_requires_asset_code",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_requires_asset_code"],
+        status: "pass",
+        severity: "warning",
+        message: `Anchor correctly rejected GET /transactions with no asset_code (HTTP ${res.status})`,
+      });
+    } else {
+      results.push({
+        id: "sep24.transactions_list_requires_asset_code",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_requires_asset_code"],
+        status: "warn",
+        severity: "warning",
+        message: `Anchor returned HTTP ${res.status} for GET /transactions with no asset_code (expected a 4xx); inconclusive`,
+      });
+    }
+  } catch (err) {
+    results.push({
+      id: "sep24.transactions_list_requires_asset_code",
+      description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_requires_asset_code"],
+      status: "fail",
+      severity: "warning",
+      message: (err as Error).message,
+    });
+  }
+
+  // 4. Negative: /transactions serves user data, so SEP-24 requires the SEP-10 JWT
+  // ("/info should be unauthenticated, but all other endpoints will require a token").
+  // Serving it without one leaks another account's history.
+  try {
+    const res = await fetchWithTimeout(listUrl, {}, timeoutMs);
+
+    if (res.status === 401 || res.status === 403) {
+      results.push({
+        id: "sep24.transactions_list_unauthenticated",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_unauthenticated"],
+        status: "pass",
+        severity: "error",
+        message: `Anchor correctly rejected unauthenticated GET /transactions with HTTP ${res.status}`,
+      });
+    } else if (res.ok) {
+      results.push({
+        id: "sep24.transactions_list_unauthenticated",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_unauthenticated"],
+        status: "fail",
+        severity: "error",
+        message: `AUTHENTICATION BYPASS: Anchor served transaction history from an unauthenticated GET /transactions request (HTTP ${res.status})`,
+      });
+    } else {
+      results.push({
+        id: "sep24.transactions_list_unauthenticated",
+        description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_unauthenticated"],
+        status: "warn",
+        severity: "warning",
+        message: `Anchor returned HTTP ${res.status} for unauthenticated GET /transactions (expected 401 or 403); inconclusive`,
+      });
+    }
+  } catch (err) {
+    results.push({
+      id: "sep24.transactions_list_unauthenticated",
+      description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_unauthenticated"],
+      status: "fail",
+      severity: "error",
+      message: (err as Error).message,
+    });
+  }
+}
+
 export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   const server =
@@ -483,6 +902,18 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
       results,
     );
   }
+
+  // 6. GET /transactions (plural) list endpoint. Filtered on the deposit asset code
+  // because that is the asset the interactive POST above created a transaction for, which
+  // is what makes the list/lookup cross-check meaningful.
+  await checkTransactionList(
+    depositAssetCode,
+    deposit.transactionId,
+    baseUrl,
+    authHeader,
+    opts.timeoutMs,
+    results,
+  );
 
   return results;
 }
