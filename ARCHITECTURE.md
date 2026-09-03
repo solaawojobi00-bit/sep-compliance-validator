@@ -4,15 +4,22 @@
 
 - **Language/runtime:** TypeScript on Node.js (LTS, 20+).
 - **Stellar SDK:** [`@stellar/stellar-sdk`](https://github.com/stellar/js-stellar-sdk) —
-  the official JS SDK ships purpose-built SEP-10 helpers
-  (`Utils.buildChallengeTx`, `Utils.readChallengeTx`, `Utils.verifyChallengeTxSigners`,
-  `Utils.verifyTxSignedBy`) that implement the exact transaction-shape checks
-  SEP-10 requires. Using these instead of hand-rolling XDR parsing keeps the
-  validator's own logic correct and in sync with any future SDK-level spec fixes.
+  the official JS SDK ships purpose-built SEP-10 helpers in its `WebAuth` namespace. The
+  validator uses two of them: `WebAuth.readChallengeTx`, which parses the anchor's
+  challenge and verifies it against the `SIGNING_KEY` declared in `stellar.toml`
+  (`sep10.ts`), and `WebAuth.buildChallengeTx`, which forges the wrong-network challenge
+  used as a negative case (`sep10-negative.ts`). Using these instead of hand-rolling XDR
+  parsing keeps the validator's own logic correct and in sync with any future SDK-level
+  spec fixes. The optional `client_domain` co-signature is checked separately with
+  `Keypair.verify` against the transaction hash, since it is verified against a key
+  discovered from the client domain's own TOML rather than the anchor's.
 - **JWKS & Cryptography:** `jose` for JSON Web Key Set (JWKS) discovery and cryptographic
   signature verification of anchor-issued SEP-10 JWT tokens.
 - **Browser Automation:** `playwright` for on-demand headless browser execution to
-  validate SEP-24 interactive web forms, DOM inputs, and completion callbacks (`--interactive-browser`).
+  validate SEP-24 interactive web forms, DOM inputs, and completion callbacks
+  (`--interactive-browser`). Declared in `optionalDependencies` and imported dynamically,
+  so a run without it installed skips the browser checks with a warning rather than
+  failing.
 - **TOML parsing:** `smol-toml` (small, spec-compliant, zero native dependencies).
 - **CLI framework:** `commander` — minimal, well-understood, and easily extensible.
 - **HTTP:** native `fetch` (Node 20+ built-in) wrapped by `core/http.ts` with configurable timeout,
@@ -69,6 +76,7 @@ sep-compliance-validator/
       sep10.ts          # challenge/response flow, JWT verification, and JWKS validation
       sep10-negative.ts # negative-case challenge validation (expired, wrong network, tampered)
       sep12.ts          # KYC customer endpoint probing, synthetic identity, and DELETE teardown
+      sep12-fields.ts   # SEP-9 fields/provided_fields schema validation
       sep24.ts          # interactive deposit/withdraw endpoints and transaction query checks
       sep24-browser.ts  # Playwright headless browser automation for interactive forms
       sep38.ts          # price and quote endpoints conformance checks
@@ -80,7 +88,7 @@ sep-compliance-validator/
       html.ts           # responsive standalone HTML dashboard report renderer
       json.ts           # machine-readable JSON report serializer
       table.ts          # CLI ASCII table renderer (cli-table3)
-  test/                 # 14 test suites covering checks, core, renderers, and CLI options
+  test/                 # vitest suites covering checks, core, renderers, and CLI options
   docs/
     dashboard-design.md # Architecture and data model for hosted dashboard web app
   package.json
