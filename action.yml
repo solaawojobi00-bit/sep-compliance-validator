@@ -40,6 +40,13 @@ inputs:
     description: "Disable state-mutating requests (e.g. SEP-12 PUT /customer)"
     required: false
     default: "false"
+  artifact-name:
+    description: >-
+      Name for the uploaded compliance report artifact. Artifact names are unique per
+      workflow run, so set this when the Action runs more than once in a run (e.g. one
+      job per anchor). Defaults to sep-compliance-report-<network>.
+    required: false
+    default: ""
 
 outputs:
   pass:
@@ -174,27 +181,15 @@ runs:
 
     - name: Display Report in Console
       shell: bash
-      run: |
-        REPORT_FILE="${RUNNER_TEMP}/sep-compliance-report.json"
-        node -e '
-          const fs = require("fs");
-          const { renderTable } = require("${{ github.action_path }}/dist/output/table.js");
-          const { renderHtml } = require("${{ github.action_path }}/dist/output/html.js");
-          const report = JSON.parse(fs.readFileSync("${RUNNER_TEMP}/sep-compliance-report.json", "utf-8"));
-          const format = "${{ inputs.format }}";
-          if (format === "html") {
-            console.log(renderHtml(report));
-          } else if (format === "json") {
-            console.log(JSON.stringify(report, null, 2));
-          } else {
-            console.log(renderTable(report));
-          }
-        '
+      env:
+        REPORT_FILE: ${{ runner.temp }}/sep-compliance-report.json
+        REPORT_FORMAT: ${{ inputs.format }}
+      run: node "${{ github.action_path }}/scripts/render-report.mjs"
 
     - name: Upload Compliance Report Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: sep-compliance-report-${{ inputs.network }}
+        name: ${{ inputs.artifact-name != '' && inputs.artifact-name || format('sep-compliance-report-{0}', inputs.network) }}
         path: ${{ runner.temp }}/sep-compliance-report.json
         if-no-files-found: warn
 

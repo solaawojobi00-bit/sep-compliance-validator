@@ -65,14 +65,14 @@ describe("runSep24BrowserChecks", () => {
       }),
       locator: vi.fn((selector: string) => {
         if (selector === "form") {
-          return { count: async () => 1 };
+          return { count: async (): Promise<number> => 1 };
         }
         if (selector === "input:not([type=hidden])") {
-          return { count: async () => 2 };
+          return { count: async (): Promise<number> => 2 };
         }
         if (selector === "input:not([type=hidden]):visible") {
           return {
-            count: async () => 2,
+            count: async (): Promise<number> => 2,
             nth: (i: number) => ({
               getAttribute: async (attr: string) => (attr === "name" ? (i === 0 ? "amount" : "email") : "text"),
               fill: vi.fn(async () => {}),

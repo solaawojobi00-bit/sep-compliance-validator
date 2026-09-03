@@ -39,6 +39,10 @@ npm install
 
 ### Running Tests & Building
 
+- **Build TypeScript** (run this first — some CLI tests spawn `dist/cli.js`):
+  ```bash
+  npm run build
+  ```
 - **Run unit tests**:
   ```bash
   npm test
@@ -47,9 +51,14 @@ npm install
   ```bash
   npm run test:watch
   ```
-- **Build TypeScript**:
+- **Lint** (typescript-eslint, bug-finding rules only — formatting is not linted):
   ```bash
-  npm run build
+  npm run lint
+  ```
+- **Type-check the test suite** (`tsconfig.json` excludes `test/`, so `npm run build`
+  does not cover it):
+  ```bash
+  npm run typecheck
   ```
 
 ### Running the CLI Locally
@@ -233,11 +242,13 @@ describe("fetchStellarToml", () => {
 
 ### 5. Validate Build & Tests
 
-Before submitting your changes, verify that the TypeScript code compiles and all tests pass:
+Before submitting your changes, run everything CI gates on:
 
 ```bash
-npm test
 npm run build
+npm test
+npm run lint
+npm run typecheck
 ```
 
 ---
@@ -246,5 +257,6 @@ npm run build
 
 1. Create a descriptive feature/fix branch: `git checkout -b <branch-name>`.
 2. Ensure your changes stay strictly within the scope of the issue you are addressing.
-3. Make sure `npm test` and `npm run build` pass cleanly.
+3. Make sure `npm run build`, `npm test`, `npm run lint`, and `npm run typecheck` pass
+   cleanly — these are the required CI checks.
 4. Open a pull request against `main` describing the changes made and linking to the relevant issue.

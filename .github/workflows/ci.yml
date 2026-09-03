@@ -6,29 +6,43 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# No job here writes to the repository, the registry, or the API.
+permissions:
+  contents: read
+
+# A push to a PR branch supersedes the run before it; don't pay for both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
-        node-version: [20.x, 22.x, 23.x]
+        # 22.x is maintenance LTS, 24.x is active LTS. 20.x is past end-of-life but stays
+        # while package.json declares engines.node ">=20" — the matrix is what makes that
+        # claim true. Drop it here and in engines together.
+        node-version: [20.x, 22.x, 24.x]
 
     steps:
     - uses: actions/checkout@v4
-    
+      with:
+        persist-credentials: false
+
     - name: Use Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
-        
+
     - name: Install dependencies
       run: npm ci
-      
+
     - name: Type-check and build
       run: npm run build
-      
+
     - name: Run tests
       if: matrix.node-version != '22.x'
       run: npm test
@@ -37,20 +51,167 @@ jobs:
       if: matrix.node-version == '22.x'
       run: npm run test:coverage
 
+  static-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Lint
+      run: npm run lint
+
+    # tsconfig.json excludes test/, so `npm run build` never type-checks the test suite —
+    # which is the majority of most changes here. tsconfig.test.json covers both.
+    - name: Type-check tests
+      run: npm run typecheck
+
+  # Proves the composite Action's own plumbing: it runs the CLI, writes a report, sets its
+  # outputs, renders the report, and propagates the exit status. Deliberately hermetic —
+  # the live-anchor run lives in live-anchor.yml so a third party's uptime cannot block a PR.
+  action-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    # The Action builds dist/ itself only when missing; build here so the smoke test
+    # exercises the code in this commit.
+    - name: Build
+      run: npm run build
+
+    - name: Start fixture anchor
+      env:
+        FIXTURE_CERT_DIR: ${{ runner.temp }}/fixture-certs
+      run: |
+        set -euo pipefail
+        # Redirected to a file, not inherited: a background process holding the step's
+        # stdout pipe open keeps the runner waiting on the step.
+        node test/fixtures/anchor/serve.mjs > "$RUNNER_TEMP/fixture-anchor.log" 2>&1 &
+
+        # Every later step, including the composite Action's inner steps, needs to trust
+        # the fixture's throwaway CA.
+        echo "NODE_EXTRA_CA_CERTS=${{ runner.temp }}/fixture-certs/cert.pem" >> "$GITHUB_ENV"
+
+        # Readiness only — TLS trust is what the CLI run itself exercises.
+        for _ in $(seq 1 30); do
+          if node -e 'require("node:https").get({host:"localhost",port:8443,path:"/.well-known/stellar.toml",rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on("error",()=>process.exit(1))'; then
+            echo "fixture anchor ready"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "fixture anchor did not become ready" >&2
+        cat "$RUNNER_TEMP/fixture-anchor.log" >&2 || true
+        exit 1
+
+    # No continue-on-error: a failure in any step inside action.yml fails this job.
     - name: Smoke test composite GitHub Action
-      if: matrix.node-version == '22.x'
-      id: test-action
+      id: smoke
+      uses: ./
+      with:
+        domain: localhost:8443
+        network: testnet
+        only: sep1
+
+    - name: Verify Action outputs and report
+      env:
+        REPORT_PATH: ${{ steps.smoke.outputs.report-path }}
+        TOTAL: ${{ steps.smoke.outputs.total }}
+        PASS: ${{ steps.smoke.outputs.pass }}
+        FAIL: ${{ steps.smoke.outputs.fail }}
+        WARN: ${{ steps.smoke.outputs.warn }}
+      run: |
+        set -euo pipefail
+        echo "Outputs - Total: $TOTAL, Pass: $PASS, Fail: $FAIL, Warn: $WARN"
+        echo "Report Path: $REPORT_PATH"
+        test -f "$REPORT_PATH"
+        test "$TOTAL" -gt 0
+        test "$PASS" = "$TOTAL"
+        test "$FAIL" = "0"
+        # The counts must actually describe the report on disk, not just be non-empty.
+        node -e '
+          const { readFileSync } = require("node:fs");
+          const report = JSON.parse(readFileSync(process.env.REPORT_PATH, "utf-8"));
+          const results = report.results ?? [];
+          if (results.length !== Number(process.env.TOTAL)) {
+            throw new Error(`report has ${results.length} results, outputs claim ${process.env.TOTAL}`);
+          }
+          if (!report.domain || !report.network) {
+            throw new Error("report is missing domain/network");
+          }
+          if (!results.every((r) => r.status === "pass")) {
+            throw new Error("fixture anchor should be fully conformant for SEP-1");
+          }
+        '
+
+  # The Action's contract for anchor pipelines is that a non-conformant anchor exits
+  # non-zero. An unresolvable domain needs no network and fails every check.
+  #
+  # Kept in its own job so this expected-failure run cannot be confused with the
+  # positive one: it gets its own report path, artifact, and status-check name.
+  action-smoke-failure-path:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    - name: Run Action against an unresolvable domain
+      id: smoke-fail
       uses: ./
       continue-on-error: true
       with:
-        domain: testanchor.stellar.org
+        domain: nonexistent.invalid
         network: testnet
+        only: sep1
+        # Artifact names are unique per workflow run, and action-smoke already uploads
+        # the default name.
+        artifact-name: sep-compliance-report-failure-path
 
-    - name: Verify Action execution and outputs
-      if: matrix.node-version == '22.x'
+    - name: Assert the failing run was reported as a failure
+      env:
+        OUTCOME: ${{ steps.smoke-fail.outcome }}
+        FAIL: ${{ steps.smoke-fail.outputs.fail }}
+        REPORT_PATH: ${{ steps.smoke-fail.outputs.report-path }}
       run: |
-        echo "Outputs - Total: ${{ steps.test-action.outputs.total }}, Pass: ${{ steps.test-action.outputs.pass }}, Fail: ${{ steps.test-action.outputs.fail }}, Warn: ${{ steps.test-action.outputs.warn }}"
-        echo "Report Path: ${{ steps.test-action.outputs.report-path }}"
-        test -n "${{ steps.test-action.outputs.total }}"
-        test -n "${{ steps.test-action.outputs.pass }}"
-        test -f "${{ steps.test-action.outputs.report-path }}"
+        set -euo pipefail
+        # A green outcome here would mean the Action swallows a non-conformant anchor.
+        test "$OUTCOME" = "failure"
+        test "$FAIL" -gt 0
+        # ...and it must still produce a usable report on the way out.
+        test -f "$REPORT_PATH"
