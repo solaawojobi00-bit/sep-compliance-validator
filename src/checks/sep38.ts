@@ -7,6 +7,18 @@ export interface Sep38Options {
   toml: StellarToml;
   network: "testnet" | "mainnet";
   timeoutMs?: number;
+  jwt?: string;
+  noWrite?: boolean;
+}
+
+// Tolerance used to compare the price formulas below: anchors round sell_amount/
+// buy_amount to the decimals required by each asset, so exact equality would be
+// too brittle.
+const PRICE_CONSISTENCY_TOLERANCE = 0.01;
+
+function approxEqual(a: number, b: number, tolerance = PRICE_CONSISTENCY_TOLERANCE): boolean {
+  const scale = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+  return Math.abs(a - b) / scale <= tolerance;
 }
 
 export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]> {
@@ -320,27 +332,74 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
   }
 
   // 5. Positive check: GET /price schema, positive price, and expires_at
-  if (!buyAsset || buyAsset === sellAsset) {
+  const hasAssetPair = Boolean(buyAsset) && buyAsset !== sellAsset;
+
+  if (!hasAssetPair) {
+    const noPairMessage = "Skipped: at least two distinct assets are required to query GET /price";
+    const noPairQuoteMessage =
+      "Skipped: at least two distinct assets are required to request a quote";
     results.push({
       id: "sep38.price_schema",
       description: "GET /price returns well-formed JSON matching SEP-38 schema",
       status: "warn",
       severity: "warning",
-      message: "Skipped: at least two distinct assets are required to query GET /price",
+      message: noPairMessage,
     });
     results.push({
       id: "sep38.price_positive",
       description: "GET /price returned price is a positive number",
       status: "warn",
       severity: "warning",
-      message: "Skipped: at least two distinct assets are required to query GET /price",
+      message: noPairMessage,
     });
     results.push({
       id: "sep38.price_expires_at",
       description: "GET /price expires_at (when present) is a valid, future timestamp",
       status: "warn",
       severity: "warning",
-      message: "Skipped: at least two distinct assets are required to query GET /price",
+      message: noPairMessage,
+    });
+    results.push({
+      id: "sep38.quote_unauthenticated",
+      description: "POST /quote without authentication is rejected",
+      status: "warn",
+      severity: "warning",
+      message: noPairQuoteMessage,
+    });
+    results.push({
+      id: "sep38.quote_schema",
+      description: "POST /quote returns well-formed JSON matching SEP-38 firm quote schema",
+      status: "warn",
+      severity: "warning",
+      message: noPairQuoteMessage,
+    });
+    results.push({
+      id: "sep38.quote_positive",
+      description: "POST /quote price and total_price are positive and consistent with amounts",
+      status: "warn",
+      severity: "warning",
+      message: noPairQuoteMessage,
+    });
+    results.push({
+      id: "sep38.quote_expires_at",
+      description: "POST /quote expires_at is a valid, future timestamp",
+      status: "warn",
+      severity: "warning",
+      message: noPairQuoteMessage,
+    });
+    results.push({
+      id: "sep38.quote_get_matches",
+      description: "GET /quote/{id} returns the same quote created by POST /quote",
+      status: "warn",
+      severity: "warning",
+      message: noPairQuoteMessage,
+    });
+    results.push({
+      id: "sep38.quote_get_nonexistent",
+      description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
+      status: "warn",
+      severity: "warning",
+      message: noPairQuoteMessage,
     });
     return results;
   }
@@ -572,6 +631,459 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       severity: "error",
       message: (err as Error).message,
     });
+  }
+
+  // 6. Negative check: POST /quote without authentication is rejected
+  if (opts.noWrite) {
+    results.push({
+      id: "sep38.quote_unauthenticated",
+      description: "POST /quote without authentication is rejected",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: --no-write mode enabled; mutating POST /quote request omitted",
+    });
+  } else {
+    try {
+      const res = await fetchWithTimeout(
+        `${baseUrl}/quote`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sell_asset: sellAsset,
+            buy_asset: buyAsset,
+            sell_amount: "100",
+            context: "sep6",
+          }),
+        },
+        opts.timeoutMs,
+      );
+
+      if (res.status === 401 || res.status === 403) {
+        results.push({
+          id: "sep38.quote_unauthenticated",
+          description: "POST /quote without authentication is rejected",
+          status: "pass",
+          severity: "error",
+          message: `Anchor correctly rejected unauthenticated POST /quote with HTTP ${res.status}`,
+        });
+      } else if (res.ok) {
+        results.push({
+          id: "sep38.quote_unauthenticated",
+          description: "POST /quote without authentication is rejected",
+          status: "fail",
+          severity: "error",
+          message: `AUTHENTICATION BYPASS: Anchor created a firm quote from an unauthenticated POST /quote request (HTTP ${res.status})`,
+        });
+      } else {
+        results.push({
+          id: "sep38.quote_unauthenticated",
+          description: "POST /quote without authentication is rejected",
+          status: "warn",
+          severity: "warning",
+          message: `Anchor returned HTTP ${res.status} for unauthenticated POST /quote (expected 401 or 403); inconclusive`,
+        });
+      }
+    } catch (err) {
+      results.push({
+        id: "sep38.quote_unauthenticated",
+        description: "POST /quote without authentication is rejected",
+        status: "fail",
+        severity: "error",
+        message: (err as Error).message,
+      });
+    }
+  }
+
+  // 7. Positive check: POST /quote creates a firm quote (schema, positive/consistent
+  // amounts, expires_at)
+  const quoteCheckIds = [
+    "sep38.quote_schema",
+    "sep38.quote_positive",
+    "sep38.quote_expires_at",
+  ] as const;
+  const quoteCheckDescriptions: Record<(typeof quoteCheckIds)[number], string> = {
+    "sep38.quote_schema": "POST /quote returns well-formed JSON matching SEP-38 firm quote schema",
+    "sep38.quote_positive": "POST /quote price and total_price are positive and consistent with amounts",
+    "sep38.quote_expires_at": "POST /quote expires_at is a valid, future timestamp",
+  };
+
+  let createdQuote: {
+    id?: string;
+    price?: string;
+    expires_at?: string;
+  } | undefined;
+
+  if (!opts.jwt) {
+    for (const id of quoteCheckIds) {
+      results.push({
+        id,
+        description: quoteCheckDescriptions[id],
+        status: "warn",
+        severity: "warning",
+        message: "Skipped: SEP-10 JWT required to create a firm quote",
+      });
+    }
+  } else if (opts.noWrite) {
+    for (const id of quoteCheckIds) {
+      results.push({
+        id,
+        description: quoteCheckDescriptions[id],
+        status: "warn",
+        severity: "warning",
+        message: "Skipped: --no-write mode enabled; mutating POST /quote request omitted",
+      });
+    }
+  } else {
+    try {
+      const res = await fetchWithTimeout(
+        `${baseUrl}/quote`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${opts.jwt}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sell_asset: sellAsset,
+            buy_asset: buyAsset,
+            sell_amount: "100",
+            context: "sep6",
+          }),
+        },
+        opts.timeoutMs,
+      );
+
+      if (!res.ok) {
+        let errorBody: any;
+        try {
+          errorBody = await res.json();
+        } catch {
+          // ignore parse error if response is not JSON
+        }
+
+        const isClientParamError =
+          res.status === 400 &&
+          typeof errorBody?.error === "string" &&
+          /missing|required|invalid|unsupported|parameter|delivery/i.test(errorBody.error);
+
+        if (isClientParamError) {
+          for (const id of quoteCheckIds) {
+            results.push({
+              id,
+              description: quoteCheckDescriptions[id],
+              status: "warn",
+              severity: "warning",
+              message: `Skipped: POST /quote was rejected due to client request parameter: "${errorBody.error}"`,
+            });
+          }
+        } else if (res.status >= 500) {
+          for (const id of quoteCheckIds) {
+            results.push({
+              id,
+              description: quoteCheckDescriptions[id],
+              status: "warn",
+              severity: "warning",
+              message: `Cannot validate: POST /quote returned HTTP ${res.status} (upstream server/gateway error; anchor quote server may be unavailable)`,
+            });
+          }
+        } else {
+          for (const id of quoteCheckIds) {
+            results.push({
+              id,
+              description: quoteCheckDescriptions[id],
+              status: "fail",
+              severity: "error",
+              message: `POST /quote returned HTTP ${res.status}${errorBody?.error ? `: ${errorBody.error}` : ""}`,
+            });
+          }
+        }
+      } else {
+        const body = (await res.json()) as {
+          id?: string;
+          expires_at?: string;
+          total_price?: string;
+          price?: string;
+          sell_asset?: string;
+          sell_amount?: string;
+          buy_asset?: string;
+          buy_amount?: string;
+          fee?: { total?: string; asset?: string };
+        };
+
+        const hasRequiredFields =
+          typeof body.id === "string" &&
+          body.id.trim().length > 0 &&
+          typeof body.expires_at === "string" &&
+          typeof body.total_price === "string" &&
+          typeof body.price === "string" &&
+          typeof body.sell_asset === "string" &&
+          typeof body.sell_amount === "string" &&
+          typeof body.buy_asset === "string" &&
+          typeof body.buy_amount === "string" &&
+          typeof body.fee === "object" &&
+          body.fee !== null &&
+          typeof body.fee.total === "string" &&
+          typeof body.fee.asset === "string";
+
+        if (!hasRequiredFields) {
+          results.push({
+            id: "sep38.quote_schema",
+            description: quoteCheckDescriptions["sep38.quote_schema"],
+            status: "fail",
+            severity: "error",
+            message:
+              "Response JSON is missing required fields (id, expires_at, total_price, price, sell_asset, sell_amount, buy_asset, buy_amount, or fee object)",
+          });
+        } else {
+          results.push({
+            id: "sep38.quote_schema",
+            description: quoteCheckDescriptions["sep38.quote_schema"],
+            status: "pass",
+            severity: "error",
+            message: `POST /quote returned valid schema with id ${body.id}`,
+          });
+          createdQuote = { id: body.id, price: body.price, expires_at: body.expires_at };
+        }
+
+        const price = parseFloat(body.price ?? "");
+        const totalPrice = parseFloat(body.total_price ?? "");
+        const sellAmt = parseFloat(body.sell_amount ?? "");
+        const buyAmt = parseFloat(body.buy_amount ?? "");
+        const positivityOk = [price, totalPrice, sellAmt, buyAmt].every(
+          (n) => !isNaN(n) && n > 0,
+        );
+
+        if (!positivityOk) {
+          results.push({
+            id: "sep38.quote_positive",
+            description: quoteCheckDescriptions["sep38.quote_positive"],
+            status: "fail",
+            severity: "error",
+            message: `price, total_price, sell_amount, and buy_amount must all be positive numbers (got price=${body.price}, total_price=${body.total_price}, sell_amount=${body.sell_amount}, buy_amount=${body.buy_amount})`,
+          });
+        } else {
+          const totalPriceConsistent = approxEqual(sellAmt, totalPrice * buyAmt);
+
+          let feeConsistent = true;
+          const feeTotal = parseFloat(body.fee?.total ?? "");
+          if (!isNaN(feeTotal) && typeof body.fee?.asset === "string") {
+            if (body.fee.asset === sellAsset) {
+              feeConsistent = approxEqual(sellAmt - feeTotal, price * buyAmt);
+            } else if (body.fee.asset === buyAsset) {
+              feeConsistent = approxEqual(sellAmt, price * (buyAmt + feeTotal));
+            }
+          }
+
+          if (!totalPriceConsistent || !feeConsistent) {
+            results.push({
+              id: "sep38.quote_positive",
+              description: quoteCheckDescriptions["sep38.quote_positive"],
+              status: "fail",
+              severity: "error",
+              message: `Returned amounts are inconsistent with the quoted price per SEP-38's price formulas (sell_amount=${body.sell_amount}, total_price=${body.total_price}, price=${body.price}, buy_amount=${body.buy_amount}, fee=${body.fee?.total} ${body.fee?.asset})`,
+            });
+          } else {
+            results.push({
+              id: "sep38.quote_positive",
+              description: quoteCheckDescriptions["sep38.quote_positive"],
+              status: "pass",
+              severity: "error",
+              message: `price and total_price are positive and consistent with sell_amount=${body.sell_amount}, buy_amount=${body.buy_amount}`,
+            });
+          }
+        }
+
+        if (typeof body.expires_at !== "string") {
+          results.push({
+            id: "sep38.quote_expires_at",
+            description: quoteCheckDescriptions["sep38.quote_expires_at"],
+            status: "fail",
+            severity: "error",
+            message: "expires_at is required in the POST /quote response but was missing",
+          });
+        } else {
+          const expTime = Date.parse(body.expires_at);
+          if (isNaN(expTime)) {
+            results.push({
+              id: "sep38.quote_expires_at",
+              description: quoteCheckDescriptions["sep38.quote_expires_at"],
+              status: "fail",
+              severity: "error",
+              message: `expires_at is not a valid ISO 8601 date string: ${body.expires_at}`,
+            });
+          } else if (expTime <= Date.now()) {
+            results.push({
+              id: "sep38.quote_expires_at",
+              description: quoteCheckDescriptions["sep38.quote_expires_at"],
+              status: "fail",
+              severity: "error",
+              message: `expires_at must be in the future, but got timestamp in past/present: ${body.expires_at}`,
+            });
+          } else {
+            results.push({
+              id: "sep38.quote_expires_at",
+              description: quoteCheckDescriptions["sep38.quote_expires_at"],
+              status: "pass",
+              severity: "error",
+              message: `expires_at is a valid future timestamp: ${body.expires_at}`,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      for (const id of quoteCheckIds) {
+        results.push({
+          id,
+          description: quoteCheckDescriptions[id],
+          status: "fail",
+          severity: "error",
+          message: (err as Error).message,
+        });
+      }
+    }
+  }
+
+  // 8. GET /quote/{id} returns the same quote created by POST /quote
+  if (!opts.jwt) {
+    results.push({
+      id: "sep38.quote_get_matches",
+      description: "GET /quote/{id} returns the same quote created by POST /quote",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: SEP-10 JWT required to fetch a firm quote",
+    });
+  } else if (opts.noWrite) {
+    results.push({
+      id: "sep38.quote_get_matches",
+      description: "GET /quote/{id} returns the same quote created by POST /quote",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: --no-write mode enabled; no quote created to fetch by id",
+    });
+  } else if (!createdQuote?.id) {
+    results.push({
+      id: "sep38.quote_get_matches",
+      description: "GET /quote/{id} returns the same quote created by POST /quote",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: POST /quote did not return a usable id",
+    });
+  } else {
+    try {
+      const getUrl = `${baseUrl}/quote/${encodeURIComponent(createdQuote.id)}`;
+      const res = await fetchWithTimeout(
+        getUrl,
+        { headers: { Authorization: `Bearer ${opts.jwt}` } },
+        opts.timeoutMs,
+      );
+
+      if (!res.ok) {
+        results.push({
+          id: "sep38.quote_get_matches",
+          description: "GET /quote/{id} returns the same quote created by POST /quote",
+          status: "fail",
+          severity: "error",
+          message: `GET ${getUrl} returned HTTP ${res.status}`,
+        });
+      } else {
+        const body = (await res.json()) as { id?: string; price?: string; expires_at?: string };
+        const mismatches: string[] = [];
+        if (body.id !== createdQuote.id) {
+          mismatches.push(`id (expected ${createdQuote.id}, got ${body.id})`);
+        }
+        if (body.price !== createdQuote.price) {
+          mismatches.push(`price (expected ${createdQuote.price}, got ${body.price})`);
+        }
+        if (body.expires_at !== createdQuote.expires_at) {
+          mismatches.push(
+            `expires_at (expected ${createdQuote.expires_at}, got ${body.expires_at})`,
+          );
+        }
+
+        if (mismatches.length > 0) {
+          results.push({
+            id: "sep38.quote_get_matches",
+            description: "GET /quote/{id} returns the same quote created by POST /quote",
+            status: "fail",
+            severity: "error",
+            message: `GET /quote/{id} does not match the quote created by POST /quote: ${mismatches.join(", ")}`,
+          });
+        } else {
+          results.push({
+            id: "sep38.quote_get_matches",
+            description: "GET /quote/{id} returns the same quote created by POST /quote",
+            status: "pass",
+            severity: "error",
+            message: `GET /quote/{id} returned a consistent quote with id ${body.id}`,
+          });
+        }
+      }
+    } catch (err) {
+      results.push({
+        id: "sep38.quote_get_matches",
+        description: "GET /quote/{id} returns the same quote created by POST /quote",
+        status: "fail",
+        severity: "error",
+        message: (err as Error).message,
+      });
+    }
+  }
+
+  // 9. Negative check: GET /quote/{id} with a nonexistent id returns 404. Read-only,
+  // so this runs regardless of --no-write.
+  if (!opts.jwt) {
+    results.push({
+      id: "sep38.quote_get_nonexistent",
+      description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
+      status: "warn",
+      severity: "warning",
+      message: "Skipped: SEP-10 JWT required to query GET /quote/{id}",
+    });
+  } else {
+    try {
+      const bogusId = "00000000-0000-4000-8000-000000000000";
+      const getUrl = `${baseUrl}/quote/${encodeURIComponent(bogusId)}`;
+      const res = await fetchWithTimeout(
+        getUrl,
+        { headers: { Authorization: `Bearer ${opts.jwt}` } },
+        opts.timeoutMs,
+      );
+
+      if (res.status === 404) {
+        results.push({
+          id: "sep38.quote_get_nonexistent",
+          description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
+          status: "pass",
+          severity: "error",
+          message: `Anchor correctly returned HTTP 404 for nonexistent quote id ${bogusId}`,
+        });
+      } else if (res.ok) {
+        results.push({
+          id: "sep38.quote_get_nonexistent",
+          description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
+          status: "fail",
+          severity: "error",
+          message: `Anchor returned HTTP ${res.status} and a quote body for nonexistent quote id ${bogusId}; expected HTTP 404`,
+        });
+      } else {
+        results.push({
+          id: "sep38.quote_get_nonexistent",
+          description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
+          status: "warn",
+          severity: "warning",
+          message: `Anchor returned HTTP ${res.status} for nonexistent quote id ${bogusId} (expected 404); inconclusive`,
+        });
+      }
+    } catch (err) {
+      results.push({
+        id: "sep38.quote_get_nonexistent",
+        description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
+        status: "fail",
+        severity: "error",
+        message: (err as Error).message,
+      });
+    }
   }
 
   return results;

@@ -220,6 +220,40 @@ ANCHOR_QUOTE_SERVER = "https://sep38.example.com"
     expect(skipCheck).toBeDefined();
   });
 
+  it("passes --no-write flag to SEP-38 runner, skipping mutating quote checks", async () => {
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.includes(".well-known/stellar.toml")) {
+        return new Response('VERSION="2.0.0"\nANCHOR_QUOTE_SERVER="https://quote.example.com"\n', {
+          status: 200,
+        });
+      }
+      if (url === "https://quote.example.com/info") {
+        return new Response(
+          JSON.stringify({
+            assets: [
+              { asset: "iso4217:USD" },
+              { asset: "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      only: "sep38",
+      noWrite: true,
+    });
+
+    expect(report).toBeDefined();
+    const quoteUnauthCheck = report?.results.find((r) => r.id === "sep38.quote_unauthenticated");
+    expect(quoteUnauthCheck?.status).toBe("warn");
+    expect(quoteUnauthCheck?.message).toContain("--no-write");
+  });
+
   it("catches uncaught crash and reports unexpected_error check", async () => {
     global.fetch = vi.fn(async () => {
       throw new Error("Catastrophic network socket error");

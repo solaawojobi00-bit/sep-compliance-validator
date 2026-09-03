@@ -79,6 +79,14 @@ describe("runSep38Checks", () => {
           }),
         } as unknown as Response;
       }
+      if (urlStr === "https://quote.example.com/quote") {
+        // Unauthenticated POST /quote (no jwt supplied in this test).
+        return {
+          ok: false,
+          status: 403,
+          json: async () => ({ error: "Missing or invalid Authorization header" }),
+        } as unknown as Response;
+      }
       throw new Error(`Unexpected url: ${urlStr}`);
     });
 
@@ -91,7 +99,14 @@ describe("runSep38Checks", () => {
     expect(results.length).toBeGreaterThan(0);
     const failures = results.filter((r) => r.status === "fail");
     expect(failures).toHaveLength(0);
-    expect(results.every((r) => r.status === "pass")).toBe(true);
+
+    const nonSkippedQuoteChecks = results.filter(
+      (r) => r.id.startsWith("sep38.quote_") && r.id !== "sep38.quote_unauthenticated",
+    );
+    expect(nonSkippedQuoteChecks.every((r) => r.status === "warn")).toBe(true);
+
+    const unauthCheck = results.find((r) => r.id === "sep38.quote_unauthenticated");
+    expect(unauthCheck?.status).toBe("pass");
   });
 
   it("skips checks when ANCHOR_QUOTE_SERVER is missing", async () => {
@@ -506,6 +521,744 @@ describe("runSep38Checks", () => {
     const priceSchemaCheck = results.find((r) => r.id === "sep38.price_schema");
     expect(priceSchemaCheck?.status).toBe("warn");
     expect(priceSchemaCheck?.message).toContain("at least two distinct assets are required");
+  });
+
+  const jwt = "fake.jwt.token";
+  const sellAssetId = "iso4217:USD";
+  const buyAssetId = "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+  function makeFetchMock(handlers: {
+    quotePost?: (body: any, hasAuth: boolean) => Response | Promise<Response>;
+    quoteGet?: (id: string) => Response | Promise<Response>;
+  }) {
+    return vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      const method = init?.method ?? "GET";
+
+      if (urlStr === "https://quote.example.com/info") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ assets: [{ asset: sellAssetId }, { asset: buyAssetId }] }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/prices") {
+        return { ok: false, status: 400, json: async () => ({ error: "missing" }) } as unknown as Response;
+      }
+      if (urlStr.includes("not-a-valid-asset")) {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/prices?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ buy_assets: [{ asset: buyAssetId, price: "1.00", decimals: 7 }] }),
+        } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/price?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            total_price: "1.00",
+            price: "1.00",
+            sell_amount: "100",
+            buy_amount: "100",
+            fee: { total: "0", asset: sellAssetId },
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/quote" && method === "POST") {
+        const hasAuth = Boolean((init?.headers as Record<string, string> | undefined)?.Authorization);
+        const body = JSON.parse((init?.body as string) ?? "{}");
+        if (handlers.quotePost) return handlers.quotePost(body, hasAuth);
+        throw new Error("quotePost handler not provided for this test");
+      }
+      if (urlStr.startsWith("https://quote.example.com/quote/")) {
+        const id = decodeURIComponent(urlStr.split("https://quote.example.com/quote/")[1]);
+        if (handlers.quoteGet) return handlers.quoteGet(id);
+        throw new Error("quoteGet handler not provided for this test");
+      }
+      throw new Error(`Unexpected request: ${method} ${urlStr}`);
+    });
+  }
+
+  it("passes the full firm-quote flow: create, refetch, and both negative cases", async () => {
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const quoteId = "de762cda-a193-4961-861e-57b31fed6eb3";
+
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) {
+          return {
+            ok: false,
+            status: 403,
+            json: async () => ({ error: "Missing Authorization header" }),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: quoteId,
+            expires_at: expiresAt,
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+      quoteGet: (id) => {
+        if (id === quoteId) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ id, price: "5.00", expires_at: expiresAt }),
+          } as unknown as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({ error: "Quote not found" }) } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const quoteChecks = results.filter((r) => r.id.startsWith("sep38.quote"));
+    expect(quoteChecks.length).toBe(6);
+    expect(quoteChecks.every((r) => r.status === "pass")).toBe(true);
+  });
+
+  it("skips authenticated quote checks with a warn when no JWT is available", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        expect(hasAuth).toBe(false);
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: "Unauthorized" }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+    });
+
+    const unauthCheck = results.find((r) => r.id === "sep38.quote_unauthenticated");
+    expect(unauthCheck?.status).toBe("pass");
+
+    for (const id of [
+      "sep38.quote_schema",
+      "sep38.quote_positive",
+      "sep38.quote_expires_at",
+      "sep38.quote_get_matches",
+      "sep38.quote_get_nonexistent",
+    ]) {
+      const check = results.find((r) => r.id === id);
+      expect(check?.status).toBe("warn");
+      expect(check?.message).toContain("SEP-10 JWT required");
+    }
+  });
+
+  it("skips mutating quote checks with a warn under --no-write, but still runs GET /quote/{id} 404 check", async () => {
+    global.fetch = makeFetchMock({
+      quoteGet: () => ({ ok: false, status: 404, json: async () => ({}) }) as unknown as Response,
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+      noWrite: true,
+    });
+
+    for (const id of [
+      "sep38.quote_unauthenticated",
+      "sep38.quote_schema",
+      "sep38.quote_positive",
+      "sep38.quote_expires_at",
+      "sep38.quote_get_matches",
+    ]) {
+      const check = results.find((r) => r.id === id);
+      expect(check?.status).toBe("warn");
+      expect(check?.message).toContain("--no-write");
+    }
+
+    const nonexistentCheck = results.find((r) => r.id === "sep38.quote_get_nonexistent");
+    expect(nonexistentCheck?.status).toBe("pass");
+  });
+
+  it("fails quote_unauthenticated as an AUTHENTICATION BYPASS when the anchor issues a quote without a JWT", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) {
+          return {
+            ok: true,
+            status: 201,
+            json: async () => ({ id: "should-not-exist" }),
+          } as unknown as Response;
+        }
+        return { ok: false, status: 500 } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const unauthCheck = results.find((r) => r.id === "sep38.quote_unauthenticated");
+    expect(unauthCheck?.status).toBe("fail");
+    expect(unauthCheck?.message).toContain("AUTHENTICATION BYPASS");
+  });
+
+  it("warns quote_unauthenticated when the anchor returns an ambiguous status for an unauthenticated request", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) {
+          return { ok: false, status: 500 } as unknown as Response;
+        }
+        return { ok: false, status: 500 } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const unauthCheck = results.find((r) => r.id === "sep38.quote_unauthenticated");
+    expect(unauthCheck?.status).toBe("warn");
+    expect(unauthCheck?.message).toContain("inconclusive");
+  });
+
+  it("fails quote_schema when the POST /quote response is missing required fields", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ id: "q1", price: "5.00" }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const schemaCheck = results.find((r) => r.id === "sep38.quote_schema");
+    expect(schemaCheck?.status).toBe("fail");
+    expect(schemaCheck?.message).toContain("missing required fields");
+
+    const getMatchesCheck = results.find((r) => r.id === "sep38.quote_get_matches");
+    expect(getMatchesCheck?.status).toBe("warn");
+    expect(getMatchesCheck?.message).toContain("did not return a usable id");
+  });
+
+  it("fails quote_positive when price or total_price is non-positive", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+            total_price: "-1.00",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const positiveCheck = results.find((r) => r.id === "sep38.quote_positive");
+    expect(positiveCheck?.status).toBe("fail");
+    expect(positiveCheck?.message).toContain("must all be positive");
+  });
+
+  it("fails quote_positive when returned amounts are inconsistent with the quoted price", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+            // total_price * buy_amount (5.42 * 100 = 542) does not equal sell_amount (999)
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "999",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const positiveCheck = results.find((r) => r.id === "sep38.quote_positive");
+    expect(positiveCheck?.status).toBe("fail");
+    expect(positiveCheck?.message).toContain("inconsistent with the quoted price");
+  });
+
+  it("validates fee-in-buy-asset price consistency using the alternate SEP-38 formula", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          // fee.asset is the requested buy_asset here, so the applicable formula is
+          // sell_amount = price * (buy_amount + fee) => 105 = 1.00 * (100 + 5)
+          json: async () => ({
+            id: "q1",
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+            total_price: "1.05", // 105/100
+            price: "1.00",
+            sell_asset: sellAssetId,
+            sell_amount: "105",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "5", asset: buyAssetId },
+          }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const positiveCheck = results.find((r) => r.id === "sep38.quote_positive");
+    expect(positiveCheck?.status).toBe("pass");
+  });
+
+  it("fails quote_expires_at when the field is missing from POST /quote", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const expiresCheck = results.find((r) => r.id === "sep38.quote_expires_at");
+    expect(expiresCheck?.status).toBe("fail");
+    expect(expiresCheck?.message).toContain("required");
+
+    // The schema check should also fail since expires_at is a required field.
+    const schemaCheck = results.find((r) => r.id === "sep38.quote_schema");
+    expect(schemaCheck?.status).toBe("fail");
+  });
+
+  it("fails quote_expires_at when the firm quote is already expired", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: new Date(Date.now() - 60_000).toISOString(),
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const expiresCheck = results.find((r) => r.id === "sep38.quote_expires_at");
+    expect(expiresCheck?.status).toBe("fail");
+    expect(expiresCheck?.message).toContain("must be in the future");
+  });
+
+  it("fails quote_get_matches when GET /quote/{id} returns a different price than POST /quote created", async () => {
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: expiresAt,
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+      quoteGet: (id) => {
+        if (id === "q1") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ id, price: "999.00", expires_at: expiresAt }),
+          } as unknown as Response;
+        }
+        return { ok: false, status: 404 } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const getMatchesCheck = results.find((r) => r.id === "sep38.quote_get_matches");
+    expect(getMatchesCheck?.status).toBe("fail");
+    expect(getMatchesCheck?.message).toContain("price (expected 5.00, got 999.00)");
+  });
+
+  it("fails quote_get_nonexistent when the anchor returns a quote body for a nonexistent id", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return { ok: false, status: 500 } as unknown as Response;
+      },
+      quoteGet: () =>
+        ({ ok: true, status: 200, json: async () => ({ id: "unexpected" }) }) as unknown as Response,
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const nonexistentCheck = results.find((r) => r.id === "sep38.quote_get_nonexistent");
+    expect(nonexistentCheck?.status).toBe("fail");
+    expect(nonexistentCheck?.message).toContain("expected HTTP 404");
+  });
+
+  it("warns quote-creation checks when POST /quote is rejected for an unsupported delivery-method parameter", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: "buy_delivery_method is required for this asset" }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    for (const id of ["sep38.quote_schema", "sep38.quote_positive", "sep38.quote_expires_at"]) {
+      const check = results.find((r) => r.id === id);
+      expect(check?.status).toBe("warn");
+      expect(check?.message).toContain("delivery_method");
+    }
+  });
+
+  it("fails quote-creation checks when POST /quote returns an unrecognized 4xx error", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: false,
+          status: 422,
+          json: async () => ({ error: "Unprocessable entity" }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    for (const id of ["sep38.quote_schema", "sep38.quote_positive", "sep38.quote_expires_at"]) {
+      const check = results.find((r) => r.id === id);
+      expect(check?.status).toBe("fail");
+      expect(check?.message).toContain("422");
+      expect(check?.message).toContain("Unprocessable entity");
+    }
+  });
+
+  it("fails quote_expires_at when the field is not a valid ISO 8601 string", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: "not-a-real-date",
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const expiresCheck = results.find((r) => r.id === "sep38.quote_expires_at");
+    expect(expiresCheck?.status).toBe("fail");
+    expect(expiresCheck?.message).toContain("not a valid ISO 8601");
+  });
+
+  it("fails quote_get_matches when GET /quote/{id} returns a non-2xx status", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: new Date(Date.now() + 60_000).toISOString(),
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+      quoteGet: () => ({ ok: false, status: 500 }) as unknown as Response,
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const getMatchesCheck = results.find((r) => r.id === "sep38.quote_get_matches");
+    expect(getMatchesCheck?.status).toBe("fail");
+    expect(getMatchesCheck?.message).toContain("returned HTTP 500");
+  });
+
+  it("fails quote_get_matches naming id and expires_at mismatches", async () => {
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const wrongExpiresAt = new Date(Date.now() + 120_000).toISOString();
+
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: "q1",
+            expires_at: expiresAt,
+            total_price: "5.42",
+            price: "5.00",
+            sell_asset: sellAssetId,
+            sell_amount: "542",
+            buy_asset: buyAssetId,
+            buy_amount: "100",
+            fee: { total: "42.00", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      },
+      quoteGet: () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "different-id", price: "5.00", expires_at: wrongExpiresAt }),
+        }) as unknown as Response,
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const getMatchesCheck = results.find((r) => r.id === "sep38.quote_get_matches");
+    expect(getMatchesCheck?.status).toBe("fail");
+    expect(getMatchesCheck?.message).toContain("id (expected q1, got different-id)");
+    expect(getMatchesCheck?.message).toContain(`expires_at (expected ${expiresAt}, got ${wrongExpiresAt})`);
+  });
+
+  it("warns quote_get_nonexistent when the anchor returns an ambiguous status for a nonexistent id", async () => {
+    global.fetch = makeFetchMock({
+      quotePost: (_body, hasAuth) => {
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        return { ok: false, status: 500 } as unknown as Response;
+      },
+      quoteGet: () => ({ ok: false, status: 500 }) as unknown as Response,
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    const nonexistentCheck = results.find((r) => r.id === "sep38.quote_get_nonexistent");
+    expect(nonexistentCheck?.status).toBe("warn");
+    expect(nonexistentCheck?.message).toContain("inconclusive");
+  });
+
+  it("fails quote-creation checks with a network error message on fetch failure", async () => {
+    global.fetch = vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      const method = init?.method ?? "GET";
+      if (urlStr === "https://quote.example.com/info") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ assets: [{ asset: sellAssetId }, { asset: buyAssetId }] }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/prices") {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.includes("not-a-valid-asset")) {
+        return { ok: false, status: 400 } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/prices?")) {
+        return { ok: true, status: 200, json: async () => ({ buy_assets: [] }) } as unknown as Response;
+      }
+      if (urlStr.startsWith("https://quote.example.com/price?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            total_price: "1.00",
+            price: "1.00",
+            sell_amount: "100",
+            buy_amount: "100",
+            fee: { total: "0", asset: sellAssetId },
+          }),
+        } as unknown as Response;
+      }
+      if (urlStr === "https://quote.example.com/quote" && method === "POST") {
+        const hasAuth = Boolean((init?.headers as Record<string, string> | undefined)?.Authorization);
+        if (!hasAuth) return { ok: false, status: 403 } as unknown as Response;
+        throw new Error("simulated network failure");
+      }
+      throw new Error(`Unexpected request: ${method} ${urlStr}`);
+    });
+
+    const results = await runSep38Checks({
+      domain: "example.com",
+      toml: validToml,
+      network: "testnet",
+      jwt,
+    });
+
+    for (const id of ["sep38.quote_schema", "sep38.quote_positive", "sep38.quote_expires_at"]) {
+      const check = results.find((r) => r.id === id);
+      expect(check?.status).toBe("fail");
+      expect(check?.message).toContain("simulated network failure");
+    }
   });
 });
 
