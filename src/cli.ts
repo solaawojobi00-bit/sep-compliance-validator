@@ -278,6 +278,8 @@ export async function runCheckAction(
               toml: toml!,
               network,
               timeoutMs,
+              jwt,
+              noWrite: options.noWrite === true || options.write === false,
             });
           });
           results.push(...sep38Results);
