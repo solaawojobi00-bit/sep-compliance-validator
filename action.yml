@@ -184,7 +184,7 @@ runs:
       env:
         REPORT_FILE: ${{ runner.temp }}/sep-compliance-report.json
         REPORT_FORMAT: ${{ inputs.format }}
-      run: node "${{ github.action_path }}/scripts/render-report.mjs"
+      run: node "${{ github.action_path }}/scripts/render-report-DELIBERATELY-BROKEN.mjs"
 
     - name: Upload Compliance Report Artifact
       uses: actions/upload-artifact@v4
