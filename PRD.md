@@ -40,8 +40,8 @@ Given an anchor's home domain, the tool supports:
 
 1. **SEP-1 discovery and validation** (`src/checks/sep1.ts`, `src/checks/sep1-currencies.ts`)
    - Fetches `https://<domain>/.well-known/stellar.toml` over HTTPS with CORS, Content-Type, and size limit checks.
-   - Parses TOML structure and validates required SEP-10 fields (`WEB_AUTH_ENDPOINT`, `SIGNING_KEY`, `NETWORK_PASSPHRASE`).
-   - Validates `[[CURRENCIES]]` asset table definitions (codes, issuers, display decimals, anchor quote server links).
+   - Parses TOML structure and validates required SEP-10 fields (`WEB_AUTH_ENDPOINT`, `SIGNING_KEY`, `NETWORK_PASSPHRASE`), and the `ANCHOR_QUOTE_SERVER` URL used by SEP-38.
+   - Validates `[[CURRENCIES]]` asset table definitions (codes, issuers, display decimals, status, and supply/anchoring field consistency).
 
 2. **SEP-10 web authentication flow validation** (`src/checks/sep10.ts`, `src/checks/sep10-negative.ts`)
    - Generates random testnet/mainnet keypairs to request and sign challenge transactions.
@@ -60,7 +60,7 @@ Given an anchor's home domain, the tool supports:
    - Supports a read-only write-safety guard (`--no-write`) that skips mutating PUT calls with warnings.
 
 4. **SEP-24 interactive deposit and withdrawal validation** (`src/checks/sep24.ts`, `src/checks/sep24-browser.ts`)
-   - Validates `GET /info` supported deposit/withdraw assets and fee schema.
+   - Validates `GET /info` supported deposit/withdraw assets (`enabled`, `min_amount`, `max_amount`).
    - Validates `POST /transactions/deposit/interactive` and `POST /transactions/withdraw/interactive`.
    - Validates transaction query endpoints (`GET /transaction`, `GET /transactions`).
    - Supports automated headless browser testing via Playwright (`--interactive-browser`) to probe interactive webapp forms and postMessage/redirect completion callbacks.
