@@ -1,0 +1,77 @@
+name: Live anchor check
+
+# Runs the validator against Stellar's reference testnet anchor.
+#
+# This used to be a step inside CI, which made every pull request depend on a third
+# party's uptime for a signal that says nothing about the pull request. Here it is a
+# nightly drift monitor instead: it catches the anchor changing, or a SEP being
+# interpreted differently in the wild, without gating anyone's merge.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testanchor:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    # continue-on-error: a non-conformant anchor is information, not a broken build.
+    # The next step decides what actually counts as a failure here.
+    - name: Run validator against testanchor.stellar.org
+      id: live
+      uses: ./
+      continue-on-error: true
+      with:
+        domain: testanchor.stellar.org
+        network: testnet
+
+    - name: Fail only if the validator could not produce a report
+      env:
+        REPORT_PATH: ${{ steps.live.outputs.report-path }}
+        TOTAL: ${{ steps.live.outputs.total }}
+        PASS: ${{ steps.live.outputs.pass }}
+        FAIL: ${{ steps.live.outputs.fail }}
+        WARN: ${{ steps.live.outputs.warn }}
+        OUTCOME: ${{ steps.live.outcome }}
+      run: |
+        set -euo pipefail
+        echo "Outcome: $OUTCOME - Total: $TOTAL, Pass: $PASS, Fail: $FAIL, Warn: $WARN"
+        {
+          echo "### Live anchor run: testanchor.stellar.org"
+          echo
+          echo "Total: ${TOTAL:-0} / Pass: ${PASS:-0} / Fail: ${FAIL:-0} / Warn: ${WARN:-0}"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Distinguishes "our tool broke" from "the anchor is non-conformant today":
+        # only the former should page anyone.
+        if [ -z "${REPORT_PATH:-}" ] || [ ! -f "$REPORT_PATH" ]; then
+          echo "::error::No report produced - the validator or the Action itself failed" >&2
+          exit 1
+        fi
+        if [ "${TOTAL:-0}" -eq 0 ]; then
+          echo "::error::Report contains zero checks - the validator ran but executed nothing" >&2
+          exit 1
+        fi
+        if [ "${FAIL:-0}" -gt 0 ]; then
+          echo "::warning::$FAIL check(s) failed against the live anchor - review the report artifact"
+        fi

@@ -1,0 +1,12 @@
+# Minimal SEP-1 conformant stellar.toml for the hermetic CI smoke test.
+#
+# It declares exactly the fields the SEP-1 checks treat as required, and nothing more:
+# every optional section (ACCOUNTS, [[CURRENCIES]], [DOCUMENTATION]) is deliberately
+# absent so the fixture stays a fixed target as new optional-field checks are added.
+# Endpoint URLs point back at the fixture server and are never requested — the smoke
+# test runs with `--only sep1`.
+
+VERSION = "2.0.0"
+NETWORK_PASSPHRASE = "Test SDF Network ; September 2015"
+SIGNING_KEY = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+WEB_AUTH_ENDPOINT = "https://localhost:8443/auth"

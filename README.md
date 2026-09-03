@@ -101,6 +101,8 @@ You can use this validator directly as a GitHub Action in your anchor repository
 | `fail-on-warn` | Set to `true` to treat warning checks as failures | `false` |
 | `only` | Comma-separated list of SEPs to validate (e.g. `sep1,sep10`) | — |
 | `interactive-browser`| Run headless browser checks against SEP-24 interactive URL | `false` |
+| `no-write` | Set to `true` to disable state-mutating requests (e.g. SEP-12 `PUT /customer`) | `false` |
+| `artifact-name` | Name for the uploaded report artifact. Artifact names are unique per workflow run, so set this when the Action runs more than once in a run | `sep-compliance-report-<network>` |
 
 ### Action Outputs
 

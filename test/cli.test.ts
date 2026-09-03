@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { buildProgram, runCheckAction, type CheckCommandOptions } from "../src/cli.js";
 import { parseStellarToml } from "../src/checks/sep1.js";
 import { guardChecker } from "../src/core/guard.js";
-import { REPORT_SCHEMA_VERSION } from "../src/core/report.js";
+import { REPORT_SCHEMA_VERSION, type CheckResult } from "../src/core/report.js";
 
 const execAsync = promisify(exec);
 const cliPath = "node dist/cli.js";
@@ -387,7 +387,9 @@ WEB_AUTH_ENDPOINT = "example.com/auth"
   });
 
   it("guardChecker catches unexpected exceptions and returns a fail CheckResult", async () => {
-    const results = await guardChecker("sep10", "Run SEP-10 flow", async () => {
+    // Explicit type argument: the throwing callback infers as Promise<never>, which would
+    // otherwise collapse the returned array's element type to never.
+    const results = await guardChecker<CheckResult[]>("sep10", "Run SEP-10 flow", async () => {
       throw new Error("Simulated unexpected crash");
     });
 
@@ -398,7 +400,7 @@ WEB_AUTH_ENDPOINT = "example.com/auth"
   });
 
   it("guardChecker falls back to String(err) when the thrown value has no message property", async () => {
-    const results = await guardChecker("sep10", "Run SEP-10 flow", async () => {
+    const results = await guardChecker<CheckResult[]>("sep10", "Run SEP-10 flow", async () => {
       throw "raw string failure";
     });
 

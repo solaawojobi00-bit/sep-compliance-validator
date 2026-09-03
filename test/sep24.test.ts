@@ -1182,7 +1182,7 @@ describe("runSep24Checks", () => {
     });
 
     it("fails at error severity when GET /transactions serves history without a JWT", async () => {
-      mockAnchor((url, init) => {
+      mockAnchor((url, _init) => {
         const params = new URLSearchParams(url.split("?")[1] ?? "");
         if (!params.get("asset_code")) {
           return { ok: false, status: 400, json: async () => ({}) } as Response;

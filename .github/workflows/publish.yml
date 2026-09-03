@@ -5,11 +5,18 @@ on:
     tags:
       - "v*"
 
+# Publishing authenticates to npm with NODE_AUTH_TOKEN; it needs nothing from the
+# GitHub token beyond reading the tag it was triggered on.
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Use Node.js 22.x
         uses: actions/setup-node@v4
