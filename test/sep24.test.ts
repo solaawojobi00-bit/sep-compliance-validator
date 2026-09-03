@@ -22,6 +22,7 @@ describe("runSep24Checks", () => {
     "sep24.transactions_list_records",
     "sep24.transactions_list_asset_filter",
     "sep24.transactions_list_contains_created",
+    "sep24.transactions_list_asset_filter_excludes",
     "sep24.transactions_list_limit",
     "sep24.transactions_list_requires_asset_code",
     "sep24.transactions_list_unauthenticated",
@@ -72,10 +73,17 @@ describe("runSep24Checks", () => {
    * Mocks a conformant deposit-only anchor and routes every GET /transactions request to
    * `listHandler`, so a list test only has to describe the list endpoint's behaviour.
    * Set `interactiveFails` to model a run where no transaction id was produced.
+   *
+   * /info advertises two enabled assets by default so the asset-filter exclusion check has
+   * a second code to filter by; `singleAsset` models the single-asset anchor for which
+   * that check cannot be exercised.
    */
   function mockAnchor(
     listHandler: (url: string, init: RequestInit | undefined) => Response,
-    { interactiveFails = false }: { interactiveFails?: boolean } = {},
+    {
+      interactiveFails = false,
+      singleAsset = false,
+    }: { interactiveFails?: boolean; singleAsset?: boolean } = {},
   ): void {
     global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString();
@@ -85,7 +93,12 @@ describe("runSep24Checks", () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ deposit: { USDC: { enabled: true } }, withdraw: {} }),
+          json: async () => ({
+            deposit: singleAsset
+              ? { USDC: { enabled: true } }
+              : { USDC: { enabled: true }, EURC: { enabled: true } },
+            withdraw: {},
+          }),
         } as Response;
       }
       if (url === `${base}/transactions/deposit/interactive`) {
@@ -146,6 +159,11 @@ describe("runSep24Checks", () => {
                 enabled: true,
                 min_amount: 1,
                 max_amount: 1000,
+              },
+              // A second enabled asset, so the list-filter exclusion check has another
+              // code to filter by and is actually exercised here.
+              EURC: {
+                enabled: true,
               },
             },
             // Deposit-only in this fixture; the dedicated withdraw tests below cover
@@ -448,7 +466,9 @@ describe("runSep24Checks", () => {
           ok: true,
           status: 200,
           json: async () => ({
-            deposit: { USDC: { enabled: true } },
+            // EURC is a second enabled asset so the list-filter exclusion check is
+            // exercised; USDC stays first, so it remains the deposit/withdraw asset.
+            deposit: { USDC: { enabled: true }, EURC: { enabled: true } },
             withdraw: { USDC: { enabled: true, min_amount: 1, max_amount: 500 } },
           }),
         } as Response;
@@ -995,6 +1015,109 @@ describe("runSep24Checks", () => {
       const filter = checks.get("sep24.transactions_list_asset_filter");
       expect(filter?.status).toBe("pass");
       expect(filter?.message).toContain("1 record(s) carried no asset identifier");
+    });
+
+    it("passes the exclusion check when the created transaction is absent under a second asset", async () => {
+      mockAnchor(
+        conformantList([{ id: listTxId, status: "incomplete", kind: "deposit", asset_code: "USDC" }]),
+      );
+
+      const checks = await runListChecks();
+
+      const excludes = checks.get("sep24.transactions_list_asset_filter_excludes");
+      expect(excludes?.status).toBe("pass");
+      expect(excludes?.severity).toBe("error");
+      expect(excludes?.message).toContain("correctly absent");
+      expect(excludes?.message).toContain("asset_code=EURC");
+    });
+
+    it("fails the exclusion check when the created transaction is returned under a different asset", async () => {
+      // Records carry no asset identifier at all, which is exactly the case the positive
+      // filter check cannot judge — so this is the only check that catches the anchor.
+      mockAnchor((url, init) => {
+        const params = new URLSearchParams(url.split("?")[1] ?? "");
+        const headers = init?.headers as Record<string, string> | undefined;
+        if (!params.get("asset_code") || !headers?.Authorization) {
+          return conformantList([])(url, init);
+        }
+        // asset_code is ignored: the same history comes back whatever asset is requested.
+        return jsonOk([{ id: listTxId, status: "incomplete", kind: "deposit" }]);
+      });
+
+      const checks = await runListChecks();
+
+      const excludes = checks.get("sep24.transactions_list_asset_filter_excludes");
+      expect(excludes?.status).toBe("fail");
+      expect(excludes?.severity).toBe("error");
+      expect(excludes?.message).toContain("asset_code filter ignored");
+      expect(excludes?.message).toContain(listTxId);
+      // The positive check stays inconclusive, which is what makes this check necessary.
+      expect(checks.get("sep24.transactions_list_asset_filter")?.status).toBe("warn");
+    });
+
+    it("does not exercise the exclusion check when /info advertises only one enabled asset", async () => {
+      mockAnchor(
+        conformantList([{ id: listTxId, status: "incomplete", kind: "deposit", asset_code: "USDC" }]),
+        { singleAsset: true },
+      );
+
+      const checks = await runListChecks();
+
+      const excludes = checks.get("sep24.transactions_list_asset_filter_excludes");
+      expect(excludes?.status).toBe("warn");
+      expect(excludes?.severity).toBe("warning");
+      expect(excludes?.message).toContain("no enabled asset other than USDC");
+    });
+
+    it("skips the exclusion check when no transaction was created this run", async () => {
+      mockAnchor(conformantList([]), { interactiveFails: true });
+
+      const checks = await runListChecks();
+
+      const excludes = checks.get("sep24.transactions_list_asset_filter_excludes");
+      expect(excludes?.status).toBe("warn");
+      expect(excludes?.severity).toBe("warning");
+      expect(excludes?.message).toContain("no transaction id was produced");
+    });
+
+    it("fails the exclusion check when the second-asset request returns an error or malformed body", async () => {
+      mockAnchor((url, init) => {
+        const params = new URLSearchParams(url.split("?")[1] ?? "");
+        if (params.get("asset_code") === "EURC") {
+          return { ok: false, status: 502, json: async () => ({}) } as Response;
+        }
+        return conformantList([{ id: listTxId, status: "incomplete", kind: "deposit", asset_code: "USDC" }])(
+          url,
+          init,
+        );
+      });
+
+      const checks = await runListChecks();
+
+      const excludes = checks.get("sep24.transactions_list_asset_filter_excludes");
+      expect(excludes?.status).toBe("fail");
+      expect(excludes?.message).toContain("HTTP 502");
+      // The USDC-filtered checks are unaffected.
+      expect(checks.get("sep24.transactions_list")?.status).toBe("pass");
+    });
+
+    it("fails the exclusion check when the second-asset response has no transactions array", async () => {
+      mockAnchor((url, init) => {
+        const params = new URLSearchParams(url.split("?")[1] ?? "");
+        if (params.get("asset_code") === "EURC") {
+          return { ok: true, status: 200, json: async () => ({ records: [] }) } as Response;
+        }
+        return conformantList([{ id: listTxId, status: "incomplete", kind: "deposit", asset_code: "USDC" }])(
+          url,
+          init,
+        );
+      });
+
+      const checks = await runListChecks();
+
+      const excludes = checks.get("sep24.transactions_list_asset_filter_excludes");
+      expect(excludes?.status).toBe("fail");
+      expect(excludes?.message).toContain('"transactions" array');
     });
 
     it("fails when limit=1 is ignored", async () => {
