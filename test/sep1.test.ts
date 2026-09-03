@@ -16,6 +16,37 @@ function mockFetch(response: Partial<Response>) {
   global.fetch = vi.fn().mockResolvedValue(defaultResponse) as unknown as typeof fetch;
 }
 
+const validTomlBody = `
+VERSION="2.0.0"
+SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
+`;
+
+/**
+ * Models how real CORS middleware behaves: `Access-Control-Allow-Origin` is emitted only
+ * in response to a request that actually carries an `Origin` header, and the server
+ * declares that with `Vary: Origin`. `corsValue` is what it answers such a request with;
+ * undefined means it emits nothing even then.
+ *
+ * Returns the mock so a test can assert on the requests that were made.
+ */
+function mockCorsAwareFetch(corsValue: string | undefined) {
+  const fn = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    const responseHeaders = new Headers({ "content-type": "text/plain", vary: "Origin" });
+    if (headers?.Origin && corsValue !== undefined) {
+      responseHeaders.set("access-control-allow-origin", corsValue);
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: responseHeaders,
+      text: async () => validTomlBody,
+    } as Response;
+  });
+  global.fetch = fn as unknown as typeof fetch;
+  return fn;
+}
+
 describe("fetchStellarToml", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -387,6 +418,96 @@ SIGNING_KEY = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"
     const corsCheck = results.find((r) => r.id === "sep1.cors_header");
     expect(corsCheck?.status).toBe("fail");
     expect(corsCheck?.message).toContain('expected "*"');
+  });
+
+  // Regression: #101. A conformant anchor emits Access-Control-Allow-Origin only for a
+  // request that carries Origin, so probing without one reported a false failure at error
+  // severity against every correctly-configured anchor, testanchor.stellar.org included.
+  it("passes CORS check against an anchor that emits the header only for cross-origin requests", async () => {
+    const fetchMock = mockCorsAwareFetch("*");
+
+    const { results } = await fetchStellarToml("example.com");
+
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("pass");
+    expect(corsCheck?.message).toContain("*");
+    // The TOML itself is still fetched without an Origin header, so an anchor that
+    // allowlists origins cannot break the fetch every downstream check depends on.
+    const [tomlCall, corsCall] = fetchMock.mock.calls;
+    expect((tomlCall[1]?.headers as Record<string, string>)?.Origin).toBeUndefined();
+    expect((corsCall[1]?.headers as Record<string, string>)?.Origin).toBe(
+      "https://sep-compliance-validator.invalid",
+    );
+    expect(results.find((r) => r.id === "sep1.fetch")?.status).toBe("pass");
+  });
+
+  it("fails CORS check when the header is absent even from a cross-origin request", async () => {
+    mockCorsAwareFetch(undefined);
+
+    const { results } = await fetchStellarToml("example.com");
+
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("fail");
+    expect(corsCheck?.severity).toBe("error");
+    expect(corsCheck?.message).toContain("missing from a cross-origin request");
+  });
+
+  it("fails CORS check when the anchor reflects the requesting origin instead of *", async () => {
+    mockCorsAwareFetch("https://sep-compliance-validator.invalid");
+
+    const { results } = await fetchStellarToml("example.com");
+
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("fail");
+    expect(corsCheck?.severity).toBe("error");
+    expect(corsCheck?.message).toContain('expected "*"');
+  });
+
+  it("reports CORS as inconclusive when the anchor refuses the probe's origin", async () => {
+    global.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (headers?.Origin) {
+        // An origin allowlist rejects the probe outright, so no header is observable.
+        return { ok: false, status: 403, headers: new Headers(), text: async () => "" } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+        text: async () => validTomlBody,
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const { results } = await fetchStellarToml("example.com");
+
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("warn");
+    expect(corsCheck?.severity).toBe("warning");
+    expect(corsCheck?.message).toContain("HTTP 403");
+    // The main fetch is untouched by the probe's rejection.
+    expect(results.find((r) => r.id === "sep1.fetch")?.status).toBe("pass");
+  });
+
+  it("reports CORS as inconclusive when the probe request itself fails", async () => {
+    global.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (headers?.Origin) {
+        throw new Error("socket hang up");
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+        text: async () => validTomlBody,
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const { results } = await fetchStellarToml("example.com");
+
+    const corsCheck = results.find((r) => r.id === "sep1.cors_header");
+    expect(corsCheck?.status).toBe("warn");
+    expect(corsCheck?.message).toContain("socket hang up");
+    expect(results.find((r) => r.id === "sep1.fetch")?.status).toBe("pass");
   });
 
   it("passes Content-Type check when text/plain (with or without charset)", async () => {

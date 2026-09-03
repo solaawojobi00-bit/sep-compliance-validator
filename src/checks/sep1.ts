@@ -102,6 +102,96 @@ export function validateHttpsUrl(
   }
 }
 
+/**
+ * The Origin the CORS probe presents. Any value serves — SEP-1 requires the response to
+ * be `*` no matter who asks — but a stable, obviously-synthetic one under the reserved
+ * .invalid TLD keeps anchor access logs readable and can never collide with a real site.
+ */
+const CORS_PROBE_ORIGIN = "https://sep-compliance-validator.invalid";
+
+/**
+ * Checks that stellar.toml is served with `Access-Control-Allow-Origin: *`, which SEP-1
+ * requires: "You must enable CORS on the stellar.toml so people can access this file from
+ * other sites."
+ *
+ * This issues its own request carrying an `Origin` header instead of reading the headers
+ * of the main stellar.toml fetch. CORS middleware only emits
+ * `Access-Control-Allow-Origin` in response to a request that actually carries `Origin` —
+ * correct behaviour, which servers advertise with `Vary: Origin` — so a plain server-side
+ * fetch observes no header even from a perfectly configured anchor.
+ *
+ * It stays a separate request rather than adding the header to the main fetch because an
+ * anchor that allowlists origins may answer an unrecognised `Origin` with a 4xx. That
+ * fetch supplies the TOML every downstream SEP-1/10/12/24/38 check parses, so a rejection
+ * there would cascade through the whole report; here the blast radius is this one check.
+ */
+async function checkCorsHeader(
+  url: string,
+  timeoutMs: number | undefined,
+  results: CheckResult[],
+): Promise<void> {
+  const id = "sep1.cors_header";
+  const description = "stellar.toml is served with Access-Control-Allow-Origin: *";
+
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      { headers: { Origin: CORS_PROBE_ORIGIN } },
+      timeoutMs,
+    );
+    const cors = res.headers?.get?.("access-control-allow-origin");
+
+    if (cors === "*") {
+      results.push({
+        id,
+        description,
+        status: "pass",
+        severity: "error",
+        message: "Access-Control-Allow-Origin is set to *",
+      });
+    } else if (cors) {
+      // Reflecting the requesting origin back is the common near-miss. It works in a
+      // browser, but SEP-1 states the header "must be set" to `*`, and an anchor that
+      // decides per-origin can still refuse a wallet it does not recognise.
+      results.push({
+        id,
+        description,
+        status: "fail",
+        severity: "error",
+        message: `Access-Control-Allow-Origin is "${cors}", expected "*"`,
+      });
+    } else if (res.ok) {
+      results.push({
+        id,
+        description,
+        status: "fail",
+        severity: "error",
+        message:
+          "Access-Control-Allow-Origin header is missing from a cross-origin request (required by SEP-1 for browser access)",
+      });
+    } else {
+      // The header could not be observed because the probe itself was refused. Saying
+      // "missing" here would be a guess: a 403 points at an origin allowlist, a 429 or
+      // 503 at something unrelated to CORS entirely.
+      results.push({
+        id,
+        description,
+        status: "warn",
+        severity: "warning",
+        message: `Could not verify CORS: anchor returned HTTP ${res.status} for a request with Origin: ${CORS_PROBE_ORIGIN}`,
+      });
+    }
+  } catch (err) {
+    results.push({
+      id,
+      description,
+      status: "warn",
+      severity: "warning",
+      message: `Could not verify CORS: ${(err as Error).message}`,
+    });
+  }
+}
+
 export async function fetchStellarToml(
   domain: string,
   timeoutMs?: number,
@@ -142,27 +232,9 @@ export async function fetchStellarToml(
       message: `Fetched ${url}${redirectInfo}`,
     });
 
-    // CORS check: Access-Control-Allow-Origin: * (required by SEP-1)
-    const cors = res.headers?.get?.("access-control-allow-origin");
-    if (cors === "*") {
-      results.push({
-        id: "sep1.cors_header",
-        description: "stellar.toml is served with Access-Control-Allow-Origin: *",
-        status: "pass",
-        severity: "error",
-        message: "Access-Control-Allow-Origin is set to *",
-      });
-    } else {
-      results.push({
-        id: "sep1.cors_header",
-        description: "stellar.toml is served with Access-Control-Allow-Origin: *",
-        status: "fail",
-        severity: "error",
-        message: cors
-          ? `Access-Control-Allow-Origin is "${cors}", expected "*"`
-          : "Access-Control-Allow-Origin header is missing (required by SEP-1 for browser access)",
-      });
-    }
+    // CORS check: Access-Control-Allow-Origin: * (required by SEP-1). Needs its own
+    // request carrying an Origin header — see checkCorsHeader.
+    await checkCorsHeader(url, timeoutMs, results);
 
     // Content-Type check: text/plain (recommended by SEP-1)
     const contentType = res.headers?.get?.("content-type");
