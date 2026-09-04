@@ -60,6 +60,10 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 - `--memo <id>`: Numeric ID memo for SEP-10 challenge authentication to validate custodial wallet flows.
 - `--muxed`: Authenticate using a muxed (`M...`) account for SEP-10.
 - `--no-write`: Disable state-mutating requests (such as SEP-12 `PUT /customer`). By default, SEP-12 validation performs mutating writes with randomized synthetic identities (`@invalid.test`) and cleans them up via `DELETE /customer/{account}` upon completion. Passing `--no-write` restricts checks to read-only probing and skips mutating operations with a warning.
+- `--sep12-verification-code <code>`: A correct confirmation code for SEP-12 `PUT /customer/verification`. Without it the success path cannot be exercised — a correct code is delivered out of band to the customer, so the validator submits only a deliberately wrong one and reports the success-response schema as *not exercised*. Supplying a real code makes `sep12.verification_response_schema` a genuine pass or fail. Intended for an anchor operator validating their own anchor, who can read the code from their own logs, test phone, or staging stub. The code is never written to the report, the console, or a CI log. Has no effect under `--no-write`.
+- `--sep12-verification-field <field>`: The SEP-9 field to verify with `--sep12-verification-code`, for anchors that flag several. Defaults to the first field the anchor flags as `VERIFICATION_REQUIRED`.
+
+> **Note on `--sep12-verification-code` and failed-attempt lockouts.** The wrong-code probe (`sep12.verification_wrong_code`) is the flow's security assertion and always runs first — once a correct code has advanced a field to `ACCEPTED`, a later wrong-code request proves nothing. On an anchor that locks a customer out after N failed attempts, that first wrong code counts against the limit, so a supplied code may be refused for reasons unrelated to its correctness. This case is reported as a warning that names the lockout as a possible cause, not as a failure of your anchor's success response; resetting the synthetic test customer and re-running clears it.
 
 ### Exit Codes
 

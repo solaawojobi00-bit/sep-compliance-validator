@@ -278,6 +278,64 @@ ANCHOR_QUOTE_SERVER = "https://sep38.example.com"
     expect(process.exitCode).toBe(1);
   });
 
+  it("returns undefined and sets exitCode 2 for an empty --sep12-verification-code", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, sep12VerificationCode: "   " });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("returns undefined and sets exitCode 2 for an empty --sep12-verification-field", async () => {
+    const report = await runCheckAction("example.com", { ...baseOpts, sep12VerificationField: "" });
+    expect(report).toBeUndefined();
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("says the verification code has no effect under --no-write, without echoing it", async () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+    global.fetch = vi.fn(async () => {
+      throw new Error("network disabled for this test");
+    }) as unknown as typeof fetch;
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      sep12VerificationCode: "424242",
+      noWrite: true,
+    });
+
+    // A note, not a rejection: --no-write is respected and the run continues.
+    expect(report).toBeDefined();
+    expect(errors.join("\n")).toContain("has no effect under --no-write");
+    // The code is a short-lived secret and must not reach the console.
+    expect(errors.join("\n")).not.toContain("424242");
+  });
+
+  it("parses the SEP-12 verification flags into camelCase options", async () => {
+    global.fetch = vi.fn(async () => {
+      return new Response('VERSION="2.0.0"\n', { status: 200 });
+    });
+
+    const program = buildProgram();
+    await program.parseAsync([
+      "node",
+      "cli.js",
+      "check",
+      "example.com",
+      "--only",
+      "sep1",
+      "--sep12-verification-code",
+      "424242",
+      "--sep12-verification-field",
+      "email_address",
+    ]);
+
+    const opts = program.commands[0].opts();
+    expect(opts.sep12VerificationCode).toBe("424242");
+    expect(opts.sep12VerificationField).toBe("email_address");
+  });
+
   it("buildProgram creates CLI and parses options", async () => {
     global.fetch = vi.fn(async () => {
       return new Response('VERSION="2.0.0"\n', { status: 200 });

@@ -11,6 +11,19 @@ export interface Sep12Options {
   jwt: string;
   timeoutMs?: number;
   noWrite?: boolean;
+  /**
+   * A real confirmation code for PUT /customer/verification, supplied by an operator
+   * validating their own anchor — the only context in which a correct code is knowable,
+   * since it is delivered out of band. When present the success path is exercised for
+   * real; when absent the flow behaves exactly as it did before. Treated as a short-lived
+   * secret: it is never written to a result message, the report, or the console.
+   */
+  verificationCode?: string;
+  /**
+   * SEP-9 field to verify, for anchors that flag several. Defaults to the first field the
+   * anchor flags as VERIFICATION_REQUIRED.
+   */
+  verificationField?: string;
 }
 
 const VALID_SEP12_STATUSES = ["ACCEPTED", "PROCESSING", "NEEDS_INFO", "REJECTED"] as const;
@@ -89,6 +102,8 @@ interface VerificationOptions {
   field: string;
   authHeader: Record<string, string>;
   timeoutMs: number | undefined;
+  /** Operator-supplied correct code; see Sep12Options.verificationCode. */
+  suppliedCode?: string;
 }
 
 /**
@@ -97,19 +112,36 @@ interface VerificationOptions {
  * status `VERIFICATION_REQUIRED`; the wallet then submits the code the user received as
  * `<field_name>_verification`.
  *
- * Only one live request carries a code, and it deliberately carries a *wrong* one — a
- * correct code cannot be known, since it is delivered out of band to a real user's phone
- * or inbox. So the wrong-code rejection is the assertion with teeth: an anchor that
- * answers 2xx has accepted an arbitrary code, which defeats the entire flow. The success
- * response schema can only be checked when an anchor does exactly that, so it reports
- * "not exercised" against a correctly-behaving anchor rather than claiming a pass it did
- * not verify.
+ * By default only one live request carries a code, and it deliberately carries a *wrong*
+ * one — a correct code cannot be known, since it is delivered out of band to a real
+ * user's phone or inbox. So the wrong-code rejection is the assertion with teeth: an
+ * anchor that answers 2xx has accepted an arbitrary code, which defeats the entire flow.
+ * The success response schema can then only be checked when an anchor does exactly that,
+ * so it reports "not exercised" against a correctly-behaving anchor rather than claiming
+ * a pass it did not verify.
+ *
+ * `suppliedCode` lifts that limitation for the one caller who can know a real code: an
+ * operator validating their own anchor. It is sent as a *second* request, after the
+ * wrong-code probe, and the resulting success body is validated for real.
+ *
+ * The ordering is deliberate and has a known cost. The wrong-code probe must come first,
+ * because once a correct code has advanced the field to ACCEPTED a later wrong-code
+ * request is answered for a field that no longer awaits verification, and would prove
+ * nothing. The cost is that an anchor which locks a customer out after N failed attempts
+ * may have already locked this synthetic customer before the correct code is tried. That
+ * is accepted rather than worked around: the alternative — a separate synthetic customer
+ * for the wrong-code probe — is not reliably reachable, because SEP-12 keys customers by
+ * (account, memo) and a second independent customer therefore needs a memo the SEP-10 JWT
+ * may not authorize, which would trade a documented, operator-recoverable lockout for
+ * false failures against conformant anchors. A rejected supplied code is reported at warn
+ * with the lockout named as a possible cause, so the operator is not told their code was
+ * simply wrong.
  */
 async function checkCustomerVerification(
   opts: VerificationOptions,
   results: CheckResult[],
 ): Promise<void> {
-  const { baseUrl, customerId, field, authHeader, timeoutMs } = opts;
+  const { baseUrl, customerId, field, authHeader, timeoutMs, suppliedCode } = opts;
   const url = `${baseUrl}/customer/verification`;
   const verificationKey = `${field}_verification`;
 
@@ -204,6 +236,42 @@ async function checkCustomerVerification(
     });
   }
 
+  // Second request, only when an operator supplied a real code. Skipped when the
+  // wrong-code probe already produced a success body: the anchor accepts arbitrary codes,
+  // that body is the one worth validating, and spending the operator's short-lived code on
+  // an anchor that does not check it proves nothing.
+  let suppliedCodeRejection: string | undefined;
+  let successFromSuppliedCode = false;
+
+  if (suppliedCode && !acceptedBody) {
+    try {
+      const res = await fetchWithTimeout(
+        url,
+        {
+          method: "PUT",
+          headers: { ...authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ id: customerId, [verificationKey]: suppliedCode }),
+        },
+        timeoutMs,
+      );
+
+      if (res.ok) {
+        successFromSuppliedCode = true;
+        try {
+          acceptedBody = (await res.json()) as Record<string, unknown>;
+        } catch {
+          // Non-JSON success body; the schema check below reports it.
+          acceptedBody = {};
+        }
+      } else {
+        // Deliberately does not echo the code — it is a short-lived secret.
+        suppliedCodeRejection = `HTTP ${res.status}`;
+      }
+    } catch (err) {
+      suppliedCodeRejection = (err as Error).message;
+    }
+  }
+
   // Success-response schema. SEP-12: the body matches GET /customer, and "the field
   // statuses for which verifications were sent must be updated to either PROCESSING or
   // ACCEPTED".
@@ -213,9 +281,17 @@ async function checkCustomerVerification(
       description: VERIFICATION_CHECK_DESCRIPTIONS["sep12.verification_response_schema"],
       status: "warn",
       severity: "warning",
-      message: `Not exercised: no success response to validate, because a correct confirmation code for ${field} cannot be known (it is delivered out of band to the customer)`,
+      message: suppliedCodeRejection
+        ? `Not exercised: the anchor rejected the supplied confirmation code for ${field} (${suppliedCodeRejection}), so there is no success response to validate. The code may be stale or already used, or this run's preceding wrong-code probe may have triggered a failed-attempt lockout — this is not in itself a defect in the anchor's success response`
+        : `Not exercised: no success response to validate, because a correct confirmation code for ${field} cannot be known (it is delivered out of band to the customer). Re-run with --sep12-verification-code to exercise the success path`,
     });
   } else {
+    // Names which request produced the body, because the two mean very different things:
+    // one is the operator's real code, the other is an anchor that accepted a random one.
+    const source = successFromSuppliedCode
+      ? " to the supplied confirmation code"
+      : " to an arbitrary confirmation code";
+
     const bodyId = acceptedBody.id;
     const bodyStatus = acceptedBody.status;
     const fieldStatus = providedFieldStatus(acceptedBody.provided_fields, field);
@@ -242,8 +318,8 @@ async function checkCustomerVerification(
       severity: "error",
       message:
         defects.length > 0
-          ? `Success response is not a conformant customer object: ${defects.join("; ")}`
-          : `Success response is a customer object with id ${customerId}, status ${String(bodyStatus)}, and provided_fields.${field}.status advanced to ${String(fieldStatus)}`,
+          ? `Success response${source} is not a conformant customer object: ${defects.join("; ")}`
+          : `Success response${source} is a customer object with id ${customerId}, status ${String(bodyStatus)}, and provided_fields.${field}.status advanced to ${String(fieldStatus)}`,
     });
   }
 
@@ -619,6 +695,20 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       "Not exercised: the anchor did not flag any provided_field as VERIFICATION_REQUIRED for this synthetic customer, so the confirmation-code flow was never triggered and remains unverified",
       results,
     );
+  } else if (
+    opts.verificationField !== undefined &&
+    !verificationRequiredFields.includes(opts.verificationField)
+  ) {
+    // Requesting a field the anchor is not awaiting would send a code for a field that
+    // needs none, so the run stops here rather than silently verifying a different field
+    // than the operator named.
+    pushVerificationResults(
+      ALL_VERIFICATION_CHECK_IDS,
+      "warn",
+      "warning",
+      `Not exercised: --sep12-verification-field "${opts.verificationField}" is not among the field(s) this anchor flagged as VERIFICATION_REQUIRED (${verificationRequiredFields.join(", ")})`,
+      results,
+    );
   } else {
     await checkCustomerVerification(
       {
@@ -626,9 +716,11 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
         customerId,
         // One field is enough to exercise the endpoint; SEP-12 accepts several
         // <field>_verification values per request, but a second adds no new assertion.
-        field: verificationRequiredFields[0],
+        // An operator whose anchor flags several can name the one they hold a code for.
+        field: opts.verificationField ?? verificationRequiredFields[0],
         authHeader,
         timeoutMs: opts.timeoutMs,
+        suppliedCode: opts.verificationCode,
       },
       results,
     );

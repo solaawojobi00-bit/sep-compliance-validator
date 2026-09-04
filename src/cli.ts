@@ -34,6 +34,8 @@ export interface CheckCommandOptions {
   muxed?: boolean;
   noWrite?: boolean;
   write?: boolean;
+  sep12VerificationCode?: string;
+  sep12VerificationField?: string;
 }
 
 export async function runCheckAction(
@@ -111,7 +113,35 @@ export async function runCheckAction(
     return;
   }
 
-  // 6. Validate mainnet production guard
+  // 6. Validate the SEP-12 verification flags. The code's *value* is never echoed back,
+  // here or anywhere else, because it is a short-lived secret.
+  if (options.sep12VerificationCode !== undefined && options.sep12VerificationCode.trim() === "") {
+    console.error("Error: --sep12-verification-code must not be empty.");
+    process.exitCode = 2;
+    return;
+  }
+
+  if (
+    options.sep12VerificationField !== undefined &&
+    options.sep12VerificationField.trim() === ""
+  ) {
+    console.error("Error: --sep12-verification-field must not be empty.");
+    process.exitCode = 2;
+    return;
+  }
+
+  // Not an error: --no-write is respected, so the mutating verification request is simply
+  // not sent. Said out loud so the flag does not appear to have been honoured.
+  if (
+    options.sep12VerificationCode !== undefined &&
+    (options.noWrite === true || options.write === false)
+  ) {
+    console.error(
+      "Note: --sep12-verification-code has no effect under --no-write; the SEP-12 verification flow is skipped entirely.",
+    );
+  }
+
+  // 7. Validate mainnet production guard
   if (
     options.network === "mainnet" &&
     !options.iUnderstandThisTouchesProduction
@@ -225,6 +255,8 @@ export async function runCheckAction(
                 jwt: jwt!,
                 timeoutMs,
                 noWrite: options.noWrite === true || options.write === false,
+                verificationCode: options.sep12VerificationCode,
+                verificationField: options.sep12VerificationField,
               });
             });
             results.push(...sep12Results);
@@ -362,6 +394,14 @@ export function buildProgram(): Command {
     .option("--memo <id>", "Numeric ID memo for SEP-10 challenge authentication")
     .option("--muxed", "Authenticate using a muxed (M...) account for SEP-10")
     .option("--no-write", "Disable state-mutating requests (e.g. SEP-12 PUT /customer)")
+    .option(
+      "--sep12-verification-code <code>",
+      "Correct confirmation code for SEP-12 PUT /customer/verification, so the success path is exercised instead of reported as not exercised. For operators validating their own anchor; the code is never logged or written to the report",
+    )
+    .option(
+      "--sep12-verification-field <field>",
+      "SEP-9 field to verify, for anchors that flag several (default: the first field flagged VERIFICATION_REQUIRED)",
+    )
     .action(async (domain: string, options: CheckCommandOptions) => {
       await runCheckAction(domain, options);
     });

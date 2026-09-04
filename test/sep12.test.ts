@@ -686,6 +686,18 @@ describe("runSep12Checks", () => {
     const run = () =>
       runSep12Checks({ domain, toml: validToml, network: "testnet", jwt });
 
+    /** Same run, with the operator-supplied verification options of #106. */
+    const runWith = (extra: { verificationCode?: string; verificationField?: string }) =>
+      runSep12Checks({ domain, toml: validToml, network: "testnet", jwt, ...extra });
+
+    const SUPPLIED_CODE = "424242";
+
+    /** Every /customer/verification request body sent during a run, in order. */
+    const verificationBodies = (fetchMock: ReturnType<typeof vi.fn>) =>
+      fetchMock.mock.calls
+        .filter((c: unknown[]) => String(c[0]) === "https://kyc.example.com/customer/verification")
+        .map((c: unknown[]) => JSON.parse((c[1] as RequestInit)?.body as string));
+
     const byId = (results: Awaited<ReturnType<typeof run>>, id: string) =>
       results.find((r) => r.id === id);
 
@@ -1045,6 +1057,247 @@ describe("runSep12Checks", () => {
       const verificationChecks = results.filter((r) => r.id.startsWith("sep12.verification"));
       expect(verificationChecks).toHaveLength(3);
       expect(verificationChecks.every((r) => r.status === "warn")).toBe(true);
+    });
+
+    describe("--sep12-verification-code (operator-supplied correct code)", () => {
+      /**
+       * An anchor that behaves correctly: it rejects any code but the real one, and on the
+       * real one advances the field. Without a supplied code this anchor can only ever
+       * produce "not exercised" for the schema check.
+       */
+      const correctlyBehavingAnchor = () =>
+        mockAnchor((body, authed) => {
+          if (!authed) {
+            return { ok: false, status: 403, json: async () => ({}) } as Response;
+          }
+          if (body.mobile_number_verification !== SUPPLIED_CODE) {
+            return {
+              ok: false,
+              status: 400,
+              json: async () => ({ error: "The provided confirmation code was invalid." }),
+            } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: body.id,
+              status: "ACCEPTED",
+              provided_fields: {
+                mobile_number: {
+                  type: "string",
+                  description: "Mobile phone number",
+                  status: "ACCEPTED",
+                },
+              },
+            }),
+          } as Response;
+        });
+
+      it("validates the real success response when a correct code is supplied", async () => {
+        const fetchMock = correctlyBehavingAnchor();
+
+        const results = await runWith({ verificationCode: SUPPLIED_CODE });
+
+        // The success path now reaches a genuine verdict instead of "not exercised".
+        const schema = byId(results, "sep12.verification_response_schema");
+        expect(schema?.status).toBe("pass");
+        expect(schema?.severity).toBe("error");
+        expect(schema?.message).toContain("supplied confirmation code");
+        expect(schema?.message).toContain("advanced to ACCEPTED");
+
+        // The security assertion is not replaced by the supplied code: a random wrong
+        // code still went first, and was still rejected.
+        const wrongCode = byId(results, "sep12.verification_wrong_code");
+        expect(wrongCode?.status).toBe("pass");
+        expect(wrongCode?.message).toContain("The provided confirmation code was invalid.");
+
+        const bodies = verificationBodies(fetchMock);
+        expect(bodies[0].mobile_number_verification).toMatch(/^\d{6}$/);
+        expect(bodies[0].mobile_number_verification).not.toBe(SUPPLIED_CODE);
+        expect(bodies[1].mobile_number_verification).toBe(SUPPLIED_CODE);
+      });
+
+      it("never writes the supplied code into any result message", async () => {
+        correctlyBehavingAnchor();
+
+        const results = await runWith({ verificationCode: SUPPLIED_CODE });
+
+        for (const check of results) {
+          expect(check.message, check.id).not.toContain(SUPPLIED_CODE);
+        }
+      });
+
+      it("reports a rejected supplied code distinctly from a malformed success body", async () => {
+        // Every code is refused, including the operator's — a stale code, or a lockout
+        // tripped by the wrong-code probe that necessarily runs first.
+        mockAnchor((_body, authed) => {
+          if (!authed) {
+            return { ok: false, status: 403, json: async () => ({}) } as Response;
+          }
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ error: "The provided confirmation code was invalid." }),
+          } as Response;
+        });
+
+        const results = await runWith({ verificationCode: SUPPLIED_CODE });
+
+        const schema = byId(results, "sep12.verification_response_schema");
+        // warn, not fail: the anchor's success response was never seen, so it has not
+        // been shown to be wrong.
+        expect(schema?.status).toBe("warn");
+        expect(schema?.severity).toBe("warning");
+        expect(schema?.message).toContain("rejected the supplied confirmation code");
+        expect(schema?.message).toContain("HTTP 400");
+        expect(schema?.message).toContain("lockout");
+        expect(schema?.message).not.toContain(SUPPLIED_CODE);
+      });
+
+      it("fails the schema check when the supplied code is accepted with a malformed body", async () => {
+        mockAnchor((body, authed) => {
+          if (!authed) {
+            return { ok: false, status: 403, json: async () => ({}) } as Response;
+          }
+          if (body.mobile_number_verification !== SUPPLIED_CODE) {
+            return { ok: false, status: 400, json: async () => ({ error: "bad code" }) } as Response;
+          }
+          // Correct code accepted, but the field status is never advanced.
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: body.id,
+              status: "ACCEPTED",
+              provided_fields: {
+                mobile_number: {
+                  type: "string",
+                  description: "Mobile phone number",
+                  status: "VERIFICATION_REQUIRED",
+                },
+              },
+            }),
+          } as Response;
+        });
+
+        const results = await runWith({ verificationCode: SUPPLIED_CODE });
+
+        const schema = byId(results, "sep12.verification_response_schema");
+        expect(schema?.status).toBe("fail");
+        expect(schema?.severity).toBe("error");
+        expect(schema?.message).toContain("supplied confirmation code");
+        expect(schema?.message).toContain("must be advanced to PROCESSING or ACCEPTED");
+        // This is the anchor a correctly-rejecting run could never catch before.
+        expect(byId(results, "sep12.verification_wrong_code")?.status).toBe("pass");
+      });
+
+      it("does not spend the supplied code on an anchor that accepts arbitrary codes", async () => {
+        const fetchMock = mockAnchor((body, authed) => {
+          if (!authed) {
+            return { ok: false, status: 403, json: async () => ({}) } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: body.id,
+              status: "ACCEPTED",
+              provided_fields: {
+                mobile_number: { type: "string", description: "Mobile", status: "ACCEPTED" },
+              },
+            }),
+          } as Response;
+        });
+
+        const results = await runWith({ verificationCode: SUPPLIED_CODE });
+
+        expect(byId(results, "sep12.verification_wrong_code")?.status).toBe("fail");
+        const schema = byId(results, "sep12.verification_response_schema");
+        expect(schema?.status).toBe("pass");
+        expect(schema?.message).toContain("arbitrary confirmation code");
+
+        // Only the wrong-code probe and the unauthenticated probe were sent; the real
+        // code was never put on the wire.
+        const bodies = verificationBodies(fetchMock);
+        expect(bodies.every((b: Record<string, unknown>) => b.mobile_number_verification !== SUPPLIED_CODE)).toBe(true);
+      });
+
+      it("does not exercise the flow when a code is supplied but no field requires verification", async () => {
+        const fetchMock = mockAnchor(
+          () => {
+            throw new Error("PUT /customer/verification must not be called");
+          },
+          {
+            mobile_number: { type: "string", description: "Mobile", status: "ACCEPTED" },
+          },
+        );
+
+        const results = await runWith({ verificationCode: SUPPLIED_CODE });
+
+        const verificationChecks = results.filter((r) => r.id.startsWith("sep12.verification"));
+        expect(verificationChecks).toHaveLength(3);
+        expect(verificationChecks.every((r) => r.status === "warn")).toBe(true);
+        expect(
+          verificationChecks.every((r) =>
+            r.message.includes("did not flag any provided_field as VERIFICATION_REQUIRED"),
+          ),
+        ).toBe(true);
+        expect(verificationBodies(fetchMock)).toHaveLength(0);
+      });
+
+      it("verifies the named field when --sep12-verification-field is supplied", async () => {
+        const fetchMock = mockAnchor(
+          (_body, authed) => {
+            if (!authed) {
+              return { ok: false, status: 403, json: async () => ({}) } as Response;
+            }
+            return { ok: false, status: 400, json: async () => ({ error: "bad code" }) } as Response;
+          },
+          {
+            mobile_number: { type: "string", description: "Mobile", status: "VERIFICATION_REQUIRED" },
+            email_address: { type: "string", description: "Email", status: "VERIFICATION_REQUIRED" },
+          },
+        );
+
+        const results = await runWith({ verificationField: "email_address" });
+
+        // email_address, not the first-flagged mobile_number.
+        expect(verificationBodies(fetchMock)[0]).toHaveProperty("email_address_verification");
+        expect(byId(results, "sep12.verification_wrong_code")?.status).toBe("pass");
+      });
+
+      it("does not exercise the flow when the named field is not awaiting verification", async () => {
+        const fetchMock = mockAnchor(() => {
+          throw new Error("PUT /customer/verification must not be called");
+        });
+
+        const results = await runWith({
+          verificationCode: SUPPLIED_CODE,
+          verificationField: "email_address",
+        });
+
+        const verificationChecks = results.filter((r) => r.id.startsWith("sep12.verification"));
+        expect(verificationChecks).toHaveLength(3);
+        for (const check of verificationChecks) {
+          expect(check.status).toBe("warn");
+          expect(check.message).toContain('"email_address" is not among the field(s)');
+          expect(check.message).toContain("mobile_number");
+        }
+        expect(verificationBodies(fetchMock)).toHaveLength(0);
+      });
+
+      it("behaves exactly as before when no code is supplied", async () => {
+        const fetchMock = correctlyBehavingAnchor();
+
+        const results = await run();
+
+        const schema = byId(results, "sep12.verification_response_schema");
+        expect(schema?.status).toBe("warn");
+        expect(schema?.message).toContain("cannot be known");
+        // One authed wrong-code probe and one unauthenticated probe, as before.
+        expect(verificationBodies(fetchMock)).toHaveLength(2);
+      });
     });
 
     it("does not exercise the flow when PUT /customer returns no customer id", async () => {
