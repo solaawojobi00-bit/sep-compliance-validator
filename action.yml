@@ -64,6 +64,13 @@ outputs:
   report-path:
     description: "File path to the generated JSON compliance report"
     value: ${{ steps.process-results.outputs.report-path }}
+  exit-code:
+    description: >-
+      Exit code from the validator CLI: 0 when every check passed, 1 when one or more
+      checks failed (or warnings failed under fail-on-warn), 2 when the invocation itself
+      was rejected. Distinguishes "this anchor is non-conformant" from "this pipeline
+      called the validator wrong" without parsing logs.
+    value: ${{ steps.run-validator.outputs.exit-code }}
 
 runs:
   using: "composite"
@@ -116,6 +123,7 @@ runs:
         node "${{ github.action_path }}/dist/cli.js" "${ARGS[@]}"
         CLI_EXIT=$?
         echo "CLI_EXIT=$CLI_EXIT" >> "$GITHUB_ENV"
+        echo "exit-code=$CLI_EXIT" >> "$GITHUB_OUTPUT"
         exit 0
 
     - name: Process Results and Generate Job Summary

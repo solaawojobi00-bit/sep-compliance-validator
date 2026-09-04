@@ -113,6 +113,7 @@ You can use this validator directly as a GitHub Action in your anchor repository
 | `warn` | Number of warning checks |
 | `total` | Total number of checks executed |
 | `report-path` | File path to the generated JSON compliance report |
+| `exit-code` | Validator CLI exit code: `0` all checks passed, `1` one or more checks failed, `2` the invocation was rejected. Lets a pipeline tell "this anchor is non-conformant" apart from "the validator was called wrong" |
 
 ### Example Workflow
 
