@@ -1,7 +1,10 @@
 # Design Proposal: Public Anchor Compliance Dashboard
 
 ## Status
-- **Status:** Proposed
+- **Status:** Partially implemented — sub-issues 1 and 2 of 5 are merged (see [§7](#7-follow-up-issues-breakdown-tiered--scoped)).
+  The registry and the daily crawler exist and run; no frontend has been built, so nothing
+  is rendered yet. Sections describing those two pieces now document deployed behaviour
+  rather than a proposal.
 - **Related Issue:** [#16](https://github.com/solaawojobi00-bit/sep-compliance-validator/issues/16)
 - **Target Phase:** Phase 3 (as identified in `PRD.md`)
 
@@ -186,10 +189,23 @@ The v1 dashboard is a lightweight static web app deployed on GitHub Pages or Clo
 
 To ensure this initiative is delivered safely and incrementally, implementation will be split into 5 scoped follow-up issues:
 
-| Issue | Title | Tier & Estimate | Scope & Deliverables |
-|---|---|---|---|
-| **Sub-Issue 1** | **Anchor Opt-In Registry & Schema Validation** | Low (30 pts) | Add `registry/anchors.json`, define JSON Schema for registry entries, and write CI workflow to validate PR submissions and domain reachability. |
-| **Sub-Issue 2** | **Automated Validation Runner & Results Pipeline** | Medium (80 pts) | Build the daily GitHub Actions runner to iterate through active registry domains, invoke `sep-compliance-validator`, output `Report` JSONs, and compile `data/summary.json`. Publishes to GitHub Pages per [§4.4](#44-hosting-target-decision). |
-| **Sub-Issue 3** | **Dashboard Web App — Overview & Directory Listing** | Medium (80 pts) | Set up static frontend app (Vite/React/HTML), parse `summary.json`, implement table listing with domain search, status filters, and pass/fail badges. |
-| **Sub-Issue 4** | **Dashboard Web App — Detailed Anchor Report View** | Medium (60 pts) | Implement anchor detail route showing check results grouped by SEP, error message inspection, and link to raw report JSON. |
-| **Sub-Issue 5** | **On-Demand Re-check Trigger & Webhook Integration** | Low (40 pts) | Add `workflow_dispatch` support with rate limiting to allow maintainers to trigger validation after releasing endpoint fixes. |
+| Issue | Title | Tier & Estimate | Status | Scope & Deliverables |
+|---|---|---|---|---|
+| **Sub-Issue 1** | **Anchor Opt-In Registry & Schema Validation** | Low (30 pts) | ✅ Merged (#87) | Add `registry/anchors.json`, define JSON Schema for registry entries, and write CI workflow to validate PR submissions and domain reachability. |
+| **Sub-Issue 2** | **Automated Validation Runner & Results Pipeline** | Medium (80 pts) | ✅ Merged (#88) | Build the daily GitHub Actions runner to iterate through active registry domains, invoke `sep-compliance-validator`, output `Report` JSONs, and compile `data/summary.json`. Publishes to GitHub Pages per [§4.4](#44-hosting-target-decision). |
+| **Sub-Issue 3** | **Dashboard Web App — Overview & Directory Listing** | Medium (80 pts) | Not started | Set up static frontend app (Vite/React/HTML), parse `summary.json`, implement table listing with domain search, status filters, and pass/fail badges. Also wires GitHub Pages to serve the `dashboard-data` branch — one repository has one Pages site, so the serving layout is decided here rather than in sub-issue 2. |
+| **Sub-Issue 4** | **Dashboard Web App — Detailed Anchor Report View** | Medium (60 pts) | Not started | Implement anchor detail route showing check results grouped by SEP, error message inspection, and link to raw report JSON. |
+| **Sub-Issue 5** | **On-Demand Re-check Trigger & Webhook Integration** | Low (40 pts) | Not started | Add `workflow_dispatch` support with rate limiting to allow maintainers to trigger validation after releasing endpoint fixes. The crawl workflow accepts a bare manual trigger today, with no per-domain input and no rate limiting. |
+
+### Implementation notes from sub-issue 2
+
+Two details worth recording, because they are non-obvious from the design above and a
+future reader would otherwise reasonably assume the simpler thing:
+
+- **Each anchor is crawled in two CLI invocations, not one.** SEP-12 requires `--no-write`
+  (the crawler must never create KYC records), but `--no-write` also suppresses SEP-38's
+  `POST /quote` checks. The two conditions are orthogonal, so a single call cannot satisfy
+  both without losing coverage. See ARCHITECTURE.md, "Dashboard data pipeline".
+- **`--only` is a hard gate, not a filter.** The SEP-12 leg must name `sep1` and `sep10` in
+  `--only` to execute at all: SEP-12 needs the JWT SEP-10 issues, and SEP-10 needs SEP-1's
+  TOML. It still publishes only its own `sep12.*` results.

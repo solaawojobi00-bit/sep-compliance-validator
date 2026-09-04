@@ -88,21 +88,34 @@ sep-compliance-validator/
     cli.ts            # Commander CLI entrypoint: defines `check <domain>`
     checks/           # Per-SEP checker implementations
       sep1.ts         # SEP-1 (stellar.toml) discovery and validation
+      sep1-currencies.ts  # [[CURRENCIES]] asset table validation
       sep10.ts        # SEP-10 web authentication challenge/response checks
+      sep10-negative.ts   # SEP-10 negative cases (expired, wrong network, tampered)
+      sep12.ts        # SEP-12 KYC customer endpoints
+      sep12-fields.ts # SEP-9 fields/provided_fields schema validation
+      sep24.ts        # SEP-24 interactive deposit/withdraw
+      sep24-browser.ts    # Playwright automation for SEP-24 interactive forms
+      sep38.ts        # SEP-38 price and quote endpoints
     core/             # Core types and shared utilities
+      guard.ts        # Error boundary so one checker crashing cannot abort the run
       http.ts         # Native fetch wrapper (timeouts, normalized errors)
       report.ts       # Shared types: CheckResult, Report, summarize()
     output/           # Formatter implementations
+      html.ts         # Standalone HTML report renderer
       json.ts         # JSON output formatter
       table.ts        # Terminal table renderer (cli-table3)
-  test/               # Unit tests (Vitest)
-    sep1.test.ts      # Tests for SEP-1 checks
-    sep10.test.ts     # Tests for SEP-10 checks
+  registry/           # Anchor opt-in registry (see registry/README.md)
+  scripts/            # Registry tooling and the dashboard crawler (scripts/crawl/)
+  test/               # Unit tests (Vitest) — one suite per checker, plus core,
+                      # renderers, CLI options, registry, and crawler
   ARCHITECTURE.md     # Technical stack and architecture details
   PRD.md              # Requirements and scope document
   package.json
   tsconfig.json
 ```
+
+`registry/` and `scripts/` are repository infrastructure, not part of the published
+package — `package.json` sets `"files": ["dist"]`.
 
 Refer to [ARCHITECTURE.md](./ARCHITECTURE.md) for full details on why these technologies and design boundaries were selected.
 
@@ -250,6 +263,7 @@ npm run build
 npm test
 npm run lint
 npm run typecheck
+npm run validate:registry
 ```
 
 ---
@@ -281,6 +295,6 @@ the registry, its schema, and `scripts/registry-*.mjs` are not shipped in the np
 
 1. Create a descriptive feature/fix branch: `git checkout -b <branch-name>`.
 2. Ensure your changes stay strictly within the scope of the issue you are addressing.
-3. Make sure `npm run build`, `npm test`, `npm run lint`, and `npm run typecheck` pass
-   cleanly — these are the required CI checks.
+3. Make sure `npm run build`, `npm test`, `npm run lint`, `npm run typecheck`, and
+   `npm run validate:registry` pass cleanly — these are the required CI checks.
 4. Open a pull request against `main` describing the changes made and linking to the relevant issue.

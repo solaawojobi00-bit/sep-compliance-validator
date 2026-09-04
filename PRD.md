@@ -86,7 +86,37 @@ Given an anchor's home domain, the tool supports:
    - Outputs metrics (`pass`, `fail`, `warn`, `total`, `report-path`).
    - Automatically writes summary tables to `$GITHUB_STEP_SUMMARY` and uploads report artifacts.
 
+## Phase 3: Public Dashboard (in progress)
+
+Extends the tool from something a developer runs to a neutral, continuously published trust
+signal. Design in [`docs/dashboard-design.md`](./docs/dashboard-design.md); delivered in
+five scoped increments, of which the first two are complete.
+
+**Delivered:**
+
+9. **Anchor opt-in registry** (`registry/`)
+   - `registry/anchors.json` as the single source of crawlable anchors — no discovery, no
+     scraping. An anchor not listed with `"enabled": true` is never validated or published.
+   - JSON Schema enforced in CI, plus a reachability check on domains a pull request adds.
+   - Opt-out by flag rather than deletion, so the record of who was listed stays auditable.
+
+10. **Automated validation runner and results pipeline** (`scripts/crawl/`, `.github/workflows/dashboard-crawl.yml`)
+    - Daily crawl of every enabled entry, publishing per-anchor `Report` JSON and a
+      rolled-up `data/summary.json` to the `dashboard-data` branch.
+    - `summary.json` regenerated from the archive rather than accumulated, so it is
+      reproducible; 90-day detail retention, 365-day history.
+    - SEP-12 always runs `--no-write`: the crawler never creates KYC records on any anchor.
+    - A leg or anchor that fails is published as *not run* rather than omitted, so the data
+      never implies checks passed that never executed.
+
+**Remaining:**
+
+- **Dashboard web app** — the static frontend reading `summary.json`: overview and
+  directory listing, then the per-anchor detail view. Until this lands the pipeline
+  produces data on schedule but nothing is browsable.
+- **On-demand re-check trigger** — `workflow_dispatch` with a per-domain input and rate
+  limiting, so an operator can re-validate after shipping a fix.
+
 ## Out of Scope / Future Work
 
 - **SEP-6 programmatic deposit/withdraw execution** — moves real/test funds; deferred permanently or until mock sandbox infrastructure exists.
-- **Hosted public dashboard / leaderboard** — technical design completed in [`docs/dashboard-design.md`](./docs/dashboard-design.md); implementation of the hosted web application and registry crawler is planned for Phase 3.
