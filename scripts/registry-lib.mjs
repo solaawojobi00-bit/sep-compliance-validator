@@ -43,7 +43,7 @@ export function validateAgainstSchema(registry, schema) {
  * Domains listed more than once, compared case-insensitively.
  *
  * A duplicate is not merely untidy: the crawler writes results under
- * data/reports/<network>/<domain>/, so two entries for one domain on one network would
+ * data/reports/<domain>/<network>/, so two entries for one domain on one network would
  * race to overwrite each other's history. Two entries for the *same* domain on
  * *different* networks are legitimate and are not duplicates.
  */
