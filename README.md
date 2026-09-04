@@ -23,11 +23,22 @@ for design details.
 - Opt-in mainnet production validation guard (`--i-understand-this-touches-production`).
 - Reusable GitHub Action composite workflow (`action.yml`) with job summaries and step outputs.
 
+**Public dashboard — data layer live, frontend not yet built:**
+- Anchor opt-in registry (`registry/anchors.json`), schema-validated in CI. An anchor is
+  only ever crawled if it has opted in — see [`registry/README.md`](./registry/README.md).
+- Daily crawler publishing per-anchor compliance reports and a rolled-up `summary.json`
+  to the `dashboard-data` branch.
+- The web app that reads that data is still to come, so there is nothing to browse yet.
+
 **Future Phases:**
+- Dashboard frontend: overview/directory listing and per-anchor detail views (see [`docs/dashboard-design.md`](./docs/dashboard-design.md)).
+- On-demand re-check trigger with rate limiting.
 - SEP-6 programmatic transfer flows.
-- Hosted public dashboard web application (see [`docs/dashboard-design.md`](./docs/dashboard-design.md)).
 
 ## Install & use
+
+**Requires Node.js 22 or newer.** Node 20 reached end-of-life in April 2026 and is no
+longer supported; CI tests against 22.x and 24.x.
 
 ### Zero-Install via npx
 
@@ -166,8 +177,20 @@ The repository includes a GitHub Actions workflow (`.github/workflows/publish.ym
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for local dev setup instructions and a step-by-step walkthrough on how to add a checker for a new SEP.
 
 ```bash
-npm test        # run the test suite (vitest)
-npm run build   # compile TypeScript to dist/
+npm run build            # compile TypeScript to dist/ (run first — some tests spawn dist/cli.js)
+npm test                 # run the test suite (vitest)
+npm run lint             # eslint, bug-finding rules only
+npm run typecheck        # type-check the test suite (tsconfig.json excludes test/)
+npm run validate:registry # check registry/anchors.json against its schema
 ```
+
+These five are the gates CI enforces on every pull request.
+
+### Getting your anchor onto the public dashboard
+
+Anchors are only validated and published if they opt in. Open a pull request adding an
+entry to [`registry/anchors.json`](./registry/anchors.json) — see
+[`registry/README.md`](./registry/README.md) for the entry format, how the two CI checks on
+a registration PR work, and how to opt out again.
 
 
