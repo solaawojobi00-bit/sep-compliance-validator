@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/solaawojobi00-bit/sep-compliance-validator/blob/main/registry/schema.json",
+  "title": "Anchor opt-in registry",
+  "description": "Anchors that have intentionally opted in to public compliance validation. An anchor absent from this file is never crawled or published. See registry/README.md.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/entry" },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "name", "network", "enabled", "contact", "addedAt"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "Anchor home domain, exactly as it would be passed to the validator: lowercase, no scheme, no port, no path, no trailing dot. This is the key of the entry; duplicates are rejected in CI.",
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable anchor name, shown in the dashboard directory.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "network": {
+          "type": "string",
+          "description": "Network the anchor is validated against. An anchor serving both registers one entry per network.",
+          "enum": ["testnet", "mainnet"]
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the anchor is currently validated. Set to false to opt out: the entry is retained for audit, and the crawler excludes it."
+        },
+        "contact": {
+          "type": "string",
+          "description": "Email address for the operator, used only to reach them about their own results.",
+          "maxLength": 254,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "addedAt": {
+          "type": "string",
+          "description": "When the entry was first added, as an ISO 8601 instant in UTC (e.g. 2026-09-01T00:00:00Z). Not updated on later edits.",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+        }
+      }
+    }
+  }
+}
