@@ -24,7 +24,7 @@ For higher-level design decisions, tech stack rationale, and system architecture
 
 ### Prerequisites
 
-- **Node.js**: version 20.x or higher (LTS recommended).
+- **Node.js**: version 22.x or higher (CI tests against 22.x and 24.x).
 - **npm**: installed with Node.js.
 
 ### Installation
