@@ -1,0 +1,120 @@
+name: Dashboard crawl
+
+# Validates every enabled anchor in registry/anchors.json once a day and publishes the
+# results as static JSON.
+#
+# The archive lives on its own long-lived branch (`dashboard-data`), not on main:
+#
+#   - a daily commit per crawl would otherwise bury main's history
+#   - the archive stays in git, so every published verdict is auditable and
+#     summary.json can be regenerated from it (section 4.2)
+#   - main's CI is never triggered by data changes
+#
+# Serving that branch over GitHub Pages (the target decided in section 4.4) is wired up by
+# the frontend issue, which owns the site layout - one repository has one Pages site, so
+# deciding it here would pre-empt that work. Until then the published data is readable
+# from the branch itself.
+on:
+  schedule:
+    # 00:00 UTC daily, per section 5.1.
+    - cron: "0 0 * * *"
+  # Manual runs only, with no per-domain input and no rate limiting: the on-demand
+  # trigger is deliberately out of scope here and belongs to its own issue. This exists
+  # so the workflow can be exercised without waiting for midnight.
+  workflow_dispatch:
+
+# Only the data branch is written, and only by the commit step below.
+permissions:
+  contents: write
+
+# Two crawls must never interleave: they would both regenerate summary.json from a
+# half-written archive and race to push it.
+concurrency:
+  group: dashboard-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Check out the validator
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    # The crawler spawns dist/cli.js, and reuses the validator's own Report types.
+    - name: Build
+      run: npm run build
+
+    # The registry is the gate: nothing is crawled that is not listed and enabled. Failing
+    # here rather than crawling a malformed entry is deliberate.
+    - name: Validate the registry before using it
+      run: npm run validate:registry
+
+    - name: Check out the published data branch
+      id: data-branch
+      continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        ref: dashboard-data
+        path: data-store
+        # Full history: the archive's own commits are the audit trail.
+        fetch-depth: 0
+
+    # First run, or the branch was deleted. An empty directory is a valid starting
+    # archive: every anchor simply has no history yet.
+    - name: Start a fresh archive if the branch does not exist yet
+      if: steps.data-branch.outcome == 'failure'
+      run: |
+        set -euo pipefail
+        echo "::notice::dashboard-data branch not found; starting a fresh archive"
+        mkdir -p data-store
+        cd data-store
+        git init -q -b dashboard-data
+        git commit -q --allow-empty -m "chore(data): initialise the dashboard archive"
+
+    - name: Crawl every enabled anchor
+      run: node scripts/crawl/crawl.mjs --data-root data-store
+
+    - name: Publish the archive
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        cd data-store
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add data
+
+        # Nothing to publish is a normal outcome, not a failure: a crawl that changed no
+        # verdict and pruned nothing produces an identical archive.
+        if git diff --cached --quiet; then
+          echo "::notice::archive unchanged; nothing to publish"
+          exit 0
+        fi
+
+        git commit -q -m "chore(data): crawl results $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -m "Published by ${RUN_URL}"
+        git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" HEAD:dashboard-data
+
+    # Kept regardless of whether the push happened, so a failed publish can still be
+    # diagnosed from the run.
+    - name: Upload the archive as a run artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dashboard-data
+        path: data-store/data
+        if-no-files-found: warn
+        retention-days: 14
