@@ -21,10 +21,9 @@ jobs:
 
     strategy:
       matrix:
-        # 22.x is maintenance LTS, 24.x is active LTS. 20.x is past end-of-life but stays
-        # while package.json declares engines.node ">=20" — the matrix is what makes that
-        # claim true. Drop it here and in engines together.
-        node-version: [20.x, 22.x, 24.x]
+        # 22.x is maintenance LTS, 24.x is active LTS. Keep this in step with
+        # engines.node in package.json — the matrix is what makes that claim true.
+        node-version: [22.x, 24.x]
 
     steps:
     - uses: actions/checkout@v4
