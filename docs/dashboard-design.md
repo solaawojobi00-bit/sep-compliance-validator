@@ -90,7 +90,7 @@ turns into silently wrong dashboard data. A report with no `schemaVersion` at al
 this field and should be treated as unversioned legacy data.
 
 ### 4.2 Storage Layout & Artifact Strategy
-To eliminate server hosting costs and retain high availability, results will be stored as static JSON artifacts published to GitHub Pages or Cloudflare R2 / S3:
+To eliminate server hosting costs and retain high availability, results will be stored as static JSON artifacts published to **GitHub Pages** (decided; see [§4.4](#44-hosting-target-decision)):
 
 - **Per-Run Historical Snapshots:**
   `data/reports/<domain>/<network>/<timestamp>.json`
@@ -121,6 +121,28 @@ To eliminate server hosting costs and retain high availability, results will be 
 ### 4.3 Retention Policy
 - Retain detailed run JSON reports for **90 days**.
 - Retain rolled-up daily pass/fail statuses in `summary.json` for **1 year** for trend analysis.
+
+### 4.4 Hosting Target (Decision)
+
+**Decision: GitHub Pages, not Cloudflare R2 / S3.** §4.2 originally left this open; the
+runner issue cannot be implemented without settling it, so it is settled here.
+
+Rationale:
+
+- **No new secrets or external accounts.** The repository already runs entirely on the
+  existing GitHub PAT. R2 or S3 would add bucket credentials as repository secrets —
+  extra attack surface and audit burden, which is a poor trade for a tool whose purpose
+  is compliance assurance.
+- **Retention does not need object-store lifecycle rules.** The 90-day and 1-year policy
+  in §4.3 is enforced by the pruning step in the runner, which does the job S3 lifecycle
+  rules would do. Lifecycle management is therefore not a reason to prefer R2 / S3 here.
+- **Public verdicts belong behind a plain URL.** No bucket auth in front of the data,
+  consistent with the transparency goal this dashboard exists to serve (§2, and the
+  neutral trust signal in §1).
+- **Not a one-way door.** If `summary.json` volume or Pages bandwidth limits become a
+  real constraint, moving the publish step to R2 / S3 is a contained follow-up: the
+  crawler, the storage layout in §4.2, the aggregation step, and the frontend's
+  `summary.json` contract are all unchanged by that swap. Only the publish target moves.
 
 ---
 
@@ -167,7 +189,7 @@ To ensure this initiative is delivered safely and incrementally, implementation 
 | Issue | Title | Tier & Estimate | Scope & Deliverables |
 |---|---|---|---|
 | **Sub-Issue 1** | **Anchor Opt-In Registry & Schema Validation** | Low (30 pts) | Add `registry/anchors.json`, define JSON Schema for registry entries, and write CI workflow to validate PR submissions and domain reachability. |
-| **Sub-Issue 2** | **Automated Validation Runner & Results Pipeline** | Medium (80 pts) | Build the daily GitHub Actions runner to iterate through active registry domains, invoke `sep-compliance-validator`, output `Report` JSONs, and compile `data/summary.json`. |
+| **Sub-Issue 2** | **Automated Validation Runner & Results Pipeline** | Medium (80 pts) | Build the daily GitHub Actions runner to iterate through active registry domains, invoke `sep-compliance-validator`, output `Report` JSONs, and compile `data/summary.json`. Publishes to GitHub Pages per [§4.4](#44-hosting-target-decision). |
 | **Sub-Issue 3** | **Dashboard Web App — Overview & Directory Listing** | Medium (80 pts) | Set up static frontend app (Vite/React/HTML), parse `summary.json`, implement table listing with domain search, status filters, and pass/fail badges. |
 | **Sub-Issue 4** | **Dashboard Web App — Detailed Anchor Report View** | Medium (60 pts) | Implement anchor detail route showing check results grouped by SEP, error message inspection, and link to raw report JSON. |
 | **Sub-Issue 5** | **On-Demand Re-check Trigger & Webhook Integration** | Low (40 pts) | Add `workflow_dispatch` support with rate limiting to allow maintainers to trigger validation after releasing endpoint fixes. |
