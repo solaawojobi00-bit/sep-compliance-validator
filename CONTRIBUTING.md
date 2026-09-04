@@ -16,6 +16,7 @@ For higher-level design decisions, tech stack rationale, and system architecture
   - [3. Register the Checker in the CLI](#3-register-the-checker-in-the-cli)
   - [4. Add Unit Tests](#4-add-unit-tests)
   - [5. Validate Build & Tests](#5-validate-build--tests)
+- [Registering an Anchor for the Public Dashboard](#registering-an-anchor-for-the-public-dashboard)
 - [Submitting a Pull Request](#submitting-a-pull-request)
 
 ---
@@ -250,6 +251,29 @@ npm test
 npm run lint
 npm run typecheck
 ```
+
+---
+
+## Registering an Anchor for the Public Dashboard
+
+Anchor operators who want their anchor validated and published on the public dashboard
+opt in by adding an entry to [`registry/anchors.json`](./registry/anchors.json). An anchor
+that is not listed there is never crawled and never published — there is no discovery or
+scraping.
+
+See [`registry/README.md`](./registry/README.md) for the entry format, how the two CI
+checks on a registration pull request work, how domain ownership is confirmed, and how to
+opt out again.
+
+To check the registry before pushing:
+
+```bash
+npm run validate:registry
+```
+
+Note this is contributor-facing infrastructure rather than part of the published package:
+the registry, its schema, and `scripts/registry-*.mjs` are not shipped in the npm tarball
+(`package.json` sets `"files": ["dist"]`).
 
 ---
 

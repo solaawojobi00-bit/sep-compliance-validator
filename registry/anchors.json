@@ -1,0 +1,10 @@
+[
+  {
+    "domain": "testanchor.stellar.org",
+    "name": "Stellar Test Anchor",
+    "network": "testnet",
+    "enabled": true,
+    "contact": "dev@stellar.org",
+    "addedAt": "2026-09-04T00:00:00Z"
+  }
+]

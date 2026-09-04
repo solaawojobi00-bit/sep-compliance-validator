@@ -1,0 +1,96 @@
+name: Registry validation
+
+# Guards registry/anchors.json, the file that decides which anchors are crawled and
+# published at all. Runs only when the registry or its own tooling changes.
+#
+# Two jobs, deliberately split by what they depend on:
+#
+#   schema        - offline. Schema conformance and duplicate detection. Cannot fail
+#                   because of anything outside this repository.
+#   domain-check  - online. Confirms a *newly added* domain serves a parseable
+#                   stellar.toml. Scoped to the entries this pull request adds or
+#                   re-enables, so an unrelated registry edit is never blocked by a
+#                   third party's outage.
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "registry/**"
+      - "scripts/registry-lib.mjs"
+      - "scripts/validate-registry.mjs"
+      - "scripts/check-registry-domains.mjs"
+      - ".github/workflows/registry-validate.yml"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "registry/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  schema:
+    name: Schema and duplicates
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Validate registry
+      run: npm run validate:registry
+
+  domain-check:
+    name: stellar.toml reachable for added domains
+    runs-on: ubuntu-latest
+    # Only meaningful on a pull request: on a push to main the entries are already
+    # merged, and re-checking them there would fail the default branch for an outage.
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        # The base commit is needed to tell an added entry from an existing one.
+        fetch-depth: 0
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    # check-registry-domains.mjs reuses the validator's own TOML parser from dist/, so
+    # "parses" means exactly what it means in a compliance run.
+    - name: Build
+      run: npm run build
+
+    - name: Extract the registry as it stands on the base branch
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+        # An empty array is the right baseline when the file did not exist yet: every
+        # entry in this PR then counts as newly added.
+        git show "${BASE_SHA}:registry/anchors.json" > "${RUNNER_TEMP}/base-anchors.json" \
+          || echo '[]' > "${RUNNER_TEMP}/base-anchors.json"
+
+    - name: Verify added domains serve a parseable stellar.toml
+      run: node scripts/check-registry-domains.mjs "${RUNNER_TEMP}/base-anchors.json" registry/anchors.json
