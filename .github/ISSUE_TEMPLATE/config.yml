@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/solaawojobi00-bit/sep-compliance-validator/blob/main/CONTRIBUTING.md
+    about: Development setup, how to add a checker for a new SEP, and how to submit a pull request.
+  - name: Register an anchor for the public dashboard
+    url: https://github.com/solaawojobi00-bit/sep-compliance-validator/blob/main/registry/README.md
+    about: Anchors are only crawled if they opt in — open a pull request adding an entry to registry/anchors.json.
