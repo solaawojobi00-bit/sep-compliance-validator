@@ -1,0 +1,72 @@
+name: Add support for a new SEP
+description: Propose and track a conformance checker for a SEP the validator does not cover yet.
+title: "[SEP-NN]: add conformance checker"
+labels: ["enhancement", "new-checker"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template tracks adding a checker for a new SEP. The implementation checklist
+        below mirrors [How to Add a Checker for a New SEP](https://github.com/solaawojobi00-bit/sep-compliance-validator/blob/main/CONTRIBUTING.md#how-to-add-a-checker-for-a-new-sep)
+        in CONTRIBUTING.md — read that section before starting.
+
+  - type: input
+    id: sep
+    attributes:
+      label: Which SEP
+      description: The SEP number and title.
+      placeholder: "SEP-6 — Deposit and Withdrawal API"
+    validations:
+      required: true
+
+  - type: input
+    id: spec-link
+    attributes:
+      label: Spec link
+      description: Link to the SEP in the stellar-protocol repository.
+      placeholder: "https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0006.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope — what should be checked
+      description: >-
+        The endpoints and spec requirements the checker should cover, and anything
+        explicitly out of scope for a first pass.
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why this SEP
+      description: Who needs it, and what it lets an anchor operator or wallet developer verify.
+    validations:
+      required: true
+
+  - type: input
+    id: test-anchor
+    attributes:
+      label: Test anchor
+      description: >-
+        A testnet anchor that implements this SEP and can be used to exercise the checker,
+        if one is known.
+      placeholder: "testanchor.stellar.org"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Implementation checklist
+      description: >-
+        The five steps from CONTRIBUTING.md. Tick these off on the pull request that
+        implements the checker.
+      options:
+        - label: "1. Create the checker module — a new file in `src/checks/` named after the SEP, taking the target domain/network/parsed `stellar.toml` and returning `CheckResult`s."
+        - label: "2. Define checks and return `CheckResult`s — one result per spec requirement, with a `sepNN.`-prefixed `id`, a `pass`/`fail`/`warn` status, and an `error`/`warning` severity."
+        - label: "3. Register the checker in the CLI — wire the checker into the `check` command's action handler in `src/cli.ts` and append its results."
+        - label: "4. Add unit tests — a matching suite under `test/` using Vitest, mocking network calls via `global.fetch`."
+        - label: "5. Validate build & tests — `npm run build`, `npm test`, `npm run lint`, `npm run typecheck`, and `npm run validate:registry` all pass."

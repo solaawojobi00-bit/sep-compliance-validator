@@ -1,0 +1,84 @@
+name: Bug report
+description: Report a check that behaves incorrectly, a crash, or wrong output.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in as much as you can —
+        the SEP/checker and the reproduction steps are the two that matter most.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: SEP / checker affected
+      description: Which checker or area does this bug involve?
+      options:
+        - sep1
+        - sep10
+        - sep12
+        - sep24
+        - sep38
+        - registry
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        The exact command you ran, including flags, plus the anchor domain and network
+        if the bug is reproducible against a public anchor.
+      placeholder: |
+        1. npx sep-compliance-validator check testanchor.stellar.org --network testnet
+        2. ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected the validator to report or do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: >-
+        What actually happened. Paste the relevant output or stack trace — running with
+        `--verbose` adds HTTP request/response diagnostics on stderr.
+    validations:
+      required: true
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI version
+      description: Output of `npx sep-compliance-validator --version`, or the commit SHA if running from source.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`. This project requires Node 22 or newer.
+      placeholder: "v22.11.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that might help — OS, CI environment, unusual anchor configuration.
+    validations:
+      required: false

@@ -1,6 +1,7 @@
 # SEP Compliance Validator
 
 [![CI](https://github.com/solaawojobi00-bit/sep-compliance-validator/actions/workflows/ci.yml/badge.svg)](https://github.com/solaawojobi00-bit/sep-compliance-validator/actions/workflows/ci.yml)
+[![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant%202.1-blue.svg)](./CODE_OF_CONDUCT.md)
 
 Automated conformance checks for Stellar anchor [SEP](https://github.com/stellar/stellar-protocol/tree/master/ecosystem)
 implementations. Point it at an anchor's home domain and it verifies that the
@@ -175,6 +176,8 @@ The repository includes a GitHub Actions workflow (`.github/workflows/publish.ym
 ## Contributing & Development
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for local dev setup instructions and a step-by-step walkthrough on how to add a checker for a new SEP.
+
+Participation in this project is governed by the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ```bash
 npm run build            # compile TypeScript to dist/ (run first — some tests spawn dist/cli.js)
