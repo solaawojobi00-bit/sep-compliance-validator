@@ -1,0 +1,83 @@
+name: Release
+
+# Gated on CI rather than on `push` directly: a release must never be cut from a
+# commit the test matrix has not already gone green on. `needs:` cannot reach across
+# workflow files, so `workflow_run` is the only mechanism that expresses this.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+# semantic-release pushes the version commit and tag (contents), and comments on the
+# issues and PRs contained in a release (issues, pull-requests).
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Two releases running at once would race on the same tag and on main's history.
+# Never cancel one in flight: a half-run release leaves a tag with no GitHub release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    # ci.yml also runs on pull_request, whose workflow_run carries the PR's head branch;
+    # the `branches` filter above catches all but a fork branch literally named "main".
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          # semantic-release derives the last release from tags and the changelog from
+          # every commit since it; a shallow clone silently produces wrong release notes.
+          fetch-depth: 0
+          # Deliberately unlike every other workflow here, which sets this to false:
+          # @semantic-release/git has to push the version commit and tag back to main.
+          persist-credentials: true
+
+      # workflow_run checks out main as it is *now*, which is not necessarily the commit
+      # CI just passed. If main has moved on, that newer commit is running its own CI and
+      # will trigger its own release — so skipping here loses nothing.
+      # Deferring is a normal outcome, not a failure, so this records a flag rather than
+      # exiting non-zero — a red X here would be indistinguishable from a broken release.
+      - name: Confirm main still points at the commit CI validated
+        id: guard
+        env:
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          if [ "$CURRENT_SHA" = "$VALIDATED_SHA" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "main is at $CURRENT_SHA but CI validated $VALIDATED_SHA; deferring to that commit's own run."
+          fi
+
+      - name: Use Node.js 22.x
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: "npm"
+
+      - name: Install dependencies
+        if: steps.guard.outputs.proceed == 'true'
+        run: npm ci
+
+      # No NPM_TOKEN and no npm publish here: .releaserc.json sets npmPublish to false,
+      # so this bumps package.json, writes CHANGELOG.md, tags, and cuts a GitHub release.
+      # Publishing to npm stays a deliberate, manual act via publish.yml.
+      - name: Release
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
