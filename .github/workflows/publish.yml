@@ -1,12 +1,11 @@
 name: Publish to npm
 
 on:
-  push:
-    tags:
-      - "v*"
+  # Never on a tag push: a tag carries the pusher's own credentials, not GITHUB_TOKEN, so it would fire this workflow regardless of intent.
+  workflow_dispatch:
 
 # Publishing authenticates to npm with NODE_AUTH_TOKEN; it needs nothing from the
-# GitHub token beyond reading the tag it was triggered on.
+# GitHub token beyond reading the ref it was dispatched against.
 permissions:
   contents: read
 
