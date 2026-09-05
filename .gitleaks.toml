@@ -1,0 +1,36 @@
+# Gitleaks configuration for sep-compliance-validator.
+#
+# The upstream default ruleset is the baseline and is never weakened — every provider
+# rule (AWS, npm, GitHub, Slack, private-key blocks, ...) stays exactly as shipped.
+# The allowlists below exist for one reason: this repository is a Stellar tool, so its
+# fixtures are full of Stellar account IDs, and those are *public* keys.
+#
+# A Stellar Ed25519 public key is base32, starts with "G", and is safe to publish — it
+# is an account's address, the equivalent of an IBAN. The corresponding credential is a
+# *seed*, which starts with "S". Because the fixtures assign those addresses to fields
+# named SIGNING_KEY / validKey, the default `generic-api-key` heuristic sees
+# "key = <56 high-entropy chars>" and reports them; all 15 such findings in this tree
+# are that same false positive.
+#
+# These allowlists match on the *secret's shape*, not on a path. That is deliberate and
+# is the narrower of the two options: a global `paths` allowlist makes gitleaks skip the
+# whole file before any rule is evaluated, which would blanket-silence a genuine
+# credential that landed in test/. Matching the value instead means only this one public
+# key format is ever ignored. An AWS key, an npm or Slack token, a PEM block, or a
+# Stellar *secret seed* (S...) does not match these regexes and still fails the scan,
+# wherever in the repository it appears.
+
+title = "sep-compliance-validator secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Stellar Ed25519 *public* account IDs used as fixture data (G + 55 base32 chars). These are addresses, not credentials; secret seeds start with S and are deliberately not allowlisted."
+regexTarget = "secret"
+regexes = ['''^G[A-Z2-7]{55}$''']
+
+[[allowlists]]
+description = "Deliberately malformed placeholder keys asserting the SEP-1/SEP-10 rejection paths."
+regexTarget = "secret"
+regexes = ['''^GNOTVALID[A-Z0-9]*$''']
