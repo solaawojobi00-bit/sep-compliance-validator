@@ -298,3 +298,11 @@ the registry, its schema, and `scripts/registry-*.mjs` are not shipped in the np
 3. Make sure `npm run build`, `npm test`, `npm run lint`, `npm run typecheck`, and
    `npm run validate:registry` pass cleanly — these are the required CI checks.
 4. Open a pull request against `main` describing the changes made and linking to the relevant issue.
+
+Pull requests are also scanned for committed credentials by Gitleaks, and the check fails
+the build on any hit. Keep real secrets out of source control: put them in a local `.env`
+file (already git-ignored) or a repository secret, and never in a fixture or a test. The
+ruleset is the Gitleaks default plus `.gitleaks.toml`, which allowlists only the Stellar
+account IDs the SEP-1 fixtures depend on — those are public addresses, not credentials.
+If the check flags something you believe is a false positive, say so in the pull request
+rather than widening the allowlist yourself.
