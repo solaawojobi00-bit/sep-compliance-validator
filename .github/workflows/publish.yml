@@ -6,8 +6,13 @@ on:
 
 # Publishing authenticates to npm with NODE_AUTH_TOKEN; it needs nothing from the
 # GitHub token beyond reading the ref it was dispatched against.
+#
+# id-token: write is the exception, and it is not a write to the repository: it lets the
+# runner mint the short-lived OIDC token npm exchanges for a provenance attestation, so
+# consumers can verify the tarball was built here by this workflow.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -16,6 +21,37 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # Tags are what the version guard below checks against, and a shallow clone
+          # fetches none of them.
+          fetch-depth: 0
+
+      # This workflow is dispatched manually, so nothing about the ref says which version
+      # is being released -- GITHUB_REF_NAME is a branch here, not a tag. What must hold
+      # is that the commit being published is one semantic-release actually released:
+      # package.json's version has a matching tag, and that tag is this commit.
+      #
+      # Without this, dispatching against a branch whose package.json has drifted
+      # publishes a version number to npm that corresponds to no release, and npm
+      # versions are immutable -- there is no undoing it, only deprecating it.
+      - name: Verify the commit is a released version
+        run: |
+          set -euo pipefail
+          pkg="$(node -p "require('./package.json').version")"
+          tag="v${pkg}"
+
+          if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::package.json is ${pkg}, but no tag ${tag} exists. Publishing is for versions semantic-release has already released."
+            exit 1
+          fi
+
+          tag_sha="$(git rev-list -n 1 "${tag}")"
+          head_sha="$(git rev-parse HEAD)"
+          if [ "${tag_sha}" != "${head_sha}" ]; then
+            echo "::error::tag ${tag} points at ${tag_sha}, but this run is on ${head_sha}. Dispatch against the released commit."
+            exit 1
+          fi
+
+          echo "publishing ${pkg} from ${tag} (${head_sha})"
 
       - name: Use Node.js 22.x
         uses: actions/setup-node@v7
@@ -33,7 +69,20 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # CI already gates these on the way to main, but a dispatch can target any commit,
+      # and the release path is the last place a regression should slip through. Seconds
+      # of runtime against an immutable publish.
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check tests
+        run: npm run typecheck
+
+      # --provenance signs the tarball with the OIDC token from id-token: write above,
+      # so npm records which repository, workflow, and commit built it. Consumers running
+      # this inside their own CI can then verify the package came from here rather than
+      # taking the registry's word for it.
       - name: Publish package
-        run: npm publish --access public
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
