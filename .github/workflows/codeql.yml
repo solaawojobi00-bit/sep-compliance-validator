@@ -1,0 +1,49 @@
+name: CodeQL
+
+# Committed as a workflow rather than enabled as default setup, so the query suite is
+# reviewable in the diff and changes to it go through a pull request like anything else.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  # Advisories are published against code that has not changed. A weekly run catches a
+  # newly-disclosed pattern in code nobody has touched since it was written.
+  schedule:
+    - cron: "27 4 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze TypeScript
+    runs-on: ubuntu-latest
+
+    # Wider than the repo default of `contents: read`: uploading results to the Security
+    # tab is the whole point, and that needs security-events: write.
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: javascript-typescript
+        # security-extended over the default suite: this tool parses attacker-controlled
+        # TOML and JSON from third-party anchors and drives a browser against their URLs,
+        # so the extra taint-tracking queries are aimed squarely at the code that matters.
+        queries: security-extended
+
+    # CodeQL's JS/TS analysis reads source directly and needs no build, but dist/ exists
+    # in a released tree and would otherwise be scanned as a second copy of everything.
+    - name: Perform CodeQL analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:javascript-typescript"

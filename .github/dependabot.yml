@@ -1,0 +1,34 @@
+version: 2
+
+# Two ecosystems, because this repo ships in two forms: an npm package built from
+# `dependencies`, and a composite GitHub Action whose `uses:` pins are themselves a
+# dependency tree that nothing else updates.
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Production and dev dependencies land in separate PRs. A bump to
+    # @stellar/stellar-sdk touches SEP-10 signing and ships to consumers; a bump to
+    # vitest does not. Reviewing them under one diff invites waving through the first
+    # because the second is boring.
+    groups:
+      production-dependencies:
+        dependency-type: production
+      development-dependencies:
+        dependency-type: development
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps(dev)"
+
+  # The Node 20 runtime removal (#137) was found by reading a deprecation warning, not
+  # by tooling. This is the half that would have caught it: action majors go stale
+  # silently until the runner stops supporting them.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
