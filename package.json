@@ -20,7 +20,8 @@
     "typecheck": "tsc -p tsconfig.test.json",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "validate:registry": "node scripts/validate-registry.mjs"
+    "validate:registry": "node scripts/validate-registry.mjs",
+    "lint:workflows": "actionlint"
   },
   "license": "MIT",
   "engines": {
