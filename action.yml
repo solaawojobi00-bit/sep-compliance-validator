@@ -76,9 +76,14 @@ runs:
   using: "composite"
   steps:
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: 22.x
+        # Auto-cache reads the *consumer's* package.json, not ours, and findLockFile in
+        # setup-node v7.0.0's cache-restore.ts throws (not warns) when a packageManager
+        # field is present but no lockfile sits at their workspace root. Our own install
+        # runs via --prefix against github.action_path, so the cache never applied here.
+        package-manager-cache: false
 
     - name: Install Playwright Chromium binary
       if: inputs.interactive-browser == 'true'
@@ -195,7 +200,7 @@ runs:
       run: node "${{ github.action_path }}/scripts/render-report.mjs"
 
     - name: Upload Compliance Report Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact-name != '' && inputs.artifact-name || format('sep-compliance-report-{0}', inputs.network) }}
         path: ${{ runner.temp }}/sep-compliance-report.json
