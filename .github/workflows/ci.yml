@@ -75,6 +75,27 @@ jobs:
     - name: Type-check tests
       run: npm run typecheck
 
+    # Nothing else validates the workflow files themselves, and their failure mode is
+    # silent: a malformed `paths:` filter or a bad `if:` does not go red, the job simply
+    # never runs, so a green tick means "nothing was checked" rather than "checks passed".
+    #
+    # Downloaded rather than taken from an action so the version and the bytes are both
+    # pinned. ubuntu-latest ships shellcheck, which actionlint finds on PATH and uses to
+    # check the bash inside every `run:` block — the part most likely to catch something.
+    - name: Lint workflow files
+      env:
+        ACTIONLINT_VERSION: 1.7.12
+        ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      run: |
+        set -euo pipefail
+        tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        curl -sSfL -o "$tarball" \
+          "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+        echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum --check --strict -
+        tar -xzf "$tarball" actionlint
+        shellcheck --version
+        ./actionlint -color
+
   # Proves the composite Action's own plumbing: it runs the CLI, writes a report, sets its
   # outputs, renders the report, and propagates the exit status. Deliberately hermetic —
   # the live-anchor run lives in live-anchor.yml so a third party's uptime cannot block a PR.
@@ -152,6 +173,10 @@ jobs:
         test "$FAIL" = "0"
         test "$EXIT_CODE" = "0"
         # The counts must actually describe the report on disk, not just be non-empty.
+        # shellcheck disable=SC2016
+        # The ${...} below are JavaScript template-literal placeholders that node expands,
+        # not shell parameters. Single quotes are required: double quotes would have bash
+        # expand them before node ever sees the script, and would clash with "node:fs".
         node -e '
           const { readFileSync } = require("node:fs");
           const report = JSON.parse(readFileSync(process.env.REPORT_PATH, "utf-8"));

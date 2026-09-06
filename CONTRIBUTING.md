@@ -264,7 +264,22 @@ npm test
 npm run lint
 npm run typecheck
 npm run validate:registry
+npm run lint:workflows   # only if you changed .github/workflows/
 ```
+
+`lint:workflows` runs [actionlint](https://github.com/rhysd/actionlint) over
+`.github/workflows/`. Unlike the others it is not an npm dependency, so install the
+binary first — `brew install actionlint`, `go install
+github.com/rhysd/actionlint/cmd/actionlint@latest`, or a
+[release download](https://github.com/rhysd/actionlint/releases). Install
+[shellcheck](https://www.shellcheck.net) alongside it and actionlint will find it on
+`PATH` and check the bash inside every `run:` block; without it that pass is silently
+skipped, so CI can still fail on a script issue your local run did not report.
+
+This one is worth running deliberately, because a broken workflow fails silently. A
+malformed `paths:` filter or a bad `if:` expression does not turn a job red — the job
+simply never runs, and a green tick then means "nothing was checked" rather than
+"checks passed".
 
 ---
 
