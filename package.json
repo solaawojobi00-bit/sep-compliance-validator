@@ -37,10 +37,15 @@
     "playwright": "^1.62.1"
   },
   "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/npm": "^13.1.5",
     "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^2.1.9",
     "ajv": "^8.20.0",
+    "conventional-changelog-conventionalcommits": "^8.0.0",
     "eslint": "^9.39.5",
+    "semantic-release": "^25.0.9",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.69.0",
     "vitest": "^2.1.8"
