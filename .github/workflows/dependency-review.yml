@@ -1,0 +1,41 @@
+name: Dependency review
+
+# Pull requests only: this action diffs the dependency manifests between base and head,
+# so there is nothing for it to compare on a push to main.
+on:
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review dependency changes
+    runs-on: ubuntu-latest
+
+    # pull-requests: write is only for the summary comment. Everything else this job
+    # does is read-only, and it never checks out or executes the PR's code.
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Review dependency changes
+      uses: actions/dependency-review-action@v5
+      with:
+        # Blocks the PR that *introduces* a high-severity dependency. Deliberately
+        # stricter than the npm audit gate in ci.yml, which tolerates the pre-existing
+        # advisories already in the tree: refusing new problems is cheap, while clearing
+        # existing ones needs a major upgrade of @stellar/stellar-sdk. This keeps the
+        # backlog from growing while that is dealt with separately.
+        fail-on-severity: high
+        comment-summary-in-pr: on-failure
+        # Copyleft licences would change the terms this package ships under, which is a
+        # decision for a human rather than a dependency bump.
+        deny-licenses: GPL-3.0, AGPL-3.0, LGPL-3.0

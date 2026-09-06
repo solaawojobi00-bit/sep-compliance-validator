@@ -96,6 +96,26 @@ jobs:
         shellcheck --version
         ./actionlint -color
 
+    # Two audits with different jobs.
+    #
+    # Blocking: the production tree only, at critical. `files: ["dist"]` means the dev
+    # tree never reaches a consumer, so gating on it would turn CI red for eslint's
+    # transitive advisories and train everyone to ignore the check. Critical rather than
+    # high because the tree currently carries two high advisories in toml, pulled in by
+    # @stellar/stellar-sdk, whose only fix is a 13 -> 17 major upgrade. Those are not
+    # reachable here — untrusted stellar.toml is parsed by smol-toml, and
+    # StellarTomlResolver is never imported — but they are real, and gating at high today
+    # would block every unrelated pull request on an upgrade nobody has done yet.
+    #
+    # Advisory: the full tree, reported and never failing, so the dev-side backlog stays
+    # visible instead of invisible.
+    - name: Audit production dependencies
+      run: npm audit --omit=dev --audit-level=critical
+
+    - name: Audit full dependency tree (advisory)
+      if: always()
+      run: npm audit || true
+
   # Proves the composite Action's own plumbing: it runs the CLI, writes a report, sets its
   # outputs, renders the report, and propagates the exit status. Deliberately hermetic —
   # the live-anchor run lives in live-anchor.yml so a third party's uptime cannot block a PR.
