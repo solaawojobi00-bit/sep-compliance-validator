@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { Account, Keypair, MuxedAccount, Networks, StrKey, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Account, Keypair, MuxedAccount, Networks, StrKey, Transaction, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -187,11 +187,17 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
 
   // 3. Inspect challenge transaction operations directly to validate nonce format, entropy, and uniqueness
   // independently of SDK readChallengeTx internals.
-  let rawChallengeTx: any;
+  // fromXDR returns Transaction | FeeBumpTransaction. A SEP-10 challenge is always a
+  // plain transaction; a fee-bump would be malformed, so it is left undefined here and
+  // the checks below report the absence rather than this throwing on a missing property.
+  let rawChallengeTx: Transaction | undefined;
   let op0: { value?: Buffer | string } | undefined;
   try {
-    rawChallengeTx = TransactionBuilder.fromXDR(challengeXdr, networkPassphrase);
-    op0 = rawChallengeTx.operations[0] as { value?: Buffer | string } | undefined;
+    const parsed = TransactionBuilder.fromXDR(challengeXdr, networkPassphrase);
+    if (parsed instanceof Transaction) {
+      rawChallengeTx = parsed;
+      op0 = rawChallengeTx.operations[0] as { value?: Buffer | string } | undefined;
+    }
   } catch {}
 
   const nonceBuf = Buffer.isBuffer(op0?.value)
@@ -397,7 +403,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
   // number zero, correct source account, Manage Data operations, timebounds,
   // home domain, and that it's signed by the anchor's SIGNING_KEY).
   let parsedClientAccountId: string;
-  let parsedChallengeTx: any;
+  let parsedChallengeTx: Transaction | undefined;
   try {
     const { tx: readTx, clientAccountID } = WebAuth.readChallengeTx(
       challengeXdr,

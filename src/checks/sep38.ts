@@ -2,6 +2,18 @@ import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
 import type { StellarToml } from "./sep1.js";
 
+/**
+ * SEP-38 error bodies are whatever the anchor chose to send. The spec documents an
+ * `error` string, but nothing guarantees one, so the body arrives as `unknown` and this
+ * narrows the single field every call site actually reads. Returning `string | undefined`
+ * rather than the whole body keeps the guard in one place instead of at each use.
+ */
+function errorMessageOf(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null || !("error" in body)) return undefined;
+  const value = (body as { error: unknown }).error;
+  return typeof value === "string" ? value : undefined;
+}
+
 export interface Sep38Options {
   domain: string;
   toml: StellarToml;
@@ -177,17 +189,17 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
     )}&sell_amount=100`;
     const res = await fetchWithTimeout(pricesUrl, {}, opts.timeoutMs);
     if (!res.ok) {
-      let errorBody: any;
+      let errorText: string | undefined;
       try {
-        errorBody = await res.json();
+        errorText = errorMessageOf(await res.json());
       } catch {
         // ignore parse error if response is not JSON
       }
 
       const isClientParamError =
         res.status === 400 &&
-        typeof errorBody?.error === "string" &&
-        /missing|required|invalid|unsupported|parameter/i.test(errorBody.error);
+        errorText !== undefined &&
+        /missing|required|invalid|unsupported|parameter/i.test(errorText);
 
       if (isClientParamError) {
         results.push({
@@ -195,21 +207,21 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           description: "GET /prices request parameters accepted by anchor",
           status: "warn",
           severity: "warning",
-          message: `Anchor rejected request parameters with HTTP 400: "${errorBody.error}" (client request error, not anchor schema defect)`,
+          message: `Anchor rejected request parameters with HTTP 400: "${errorText}" (client request error, not anchor schema defect)`,
         });
         results.push({
           id: "sep38.prices_schema",
           description: "GET /prices returns well-formed JSON matching SEP-38 schema",
           status: "warn",
           severity: "warning",
-          message: `Skipped schema check: GET /prices was rejected due to client request parameter: "${errorBody.error}"`,
+          message: `Skipped schema check: GET /prices was rejected due to client request parameter: "${errorText}"`,
         });
         results.push({
           id: "sep38.prices_positive",
           description: "GET /prices returned prices are positive numbers",
           status: "warn",
           severity: "warning",
-          message: `Skipped prices check: GET /prices was rejected due to client request parameter: "${errorBody.error}"`,
+          message: `Skipped prices check: GET /prices was rejected due to client request parameter: "${errorText}"`,
         });
       } else if (res.status >= 500) {
         results.push({
@@ -232,7 +244,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           description: "GET /prices returns well-formed JSON matching SEP-38 schema",
           status: "fail",
           severity: "error",
-          message: `GET /prices returned HTTP ${res.status}${errorBody?.error ? `: ${errorBody.error}` : ""}`,
+          message: `GET /prices returned HTTP ${res.status}${errorText ? `: ${errorText}` : ""}`,
         });
         results.push({
           id: "sep38.prices_positive",
@@ -412,28 +424,28 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
     let res = await fetchWithTimeout(priceUrl, {}, opts.timeoutMs);
 
     if (res.status === 400) {
-      let errorBody: any;
+      let errorText: string | undefined;
       try {
-        errorBody = await res.json();
+        errorText = errorMessageOf(await res.json());
       } catch {}
-      if (typeof errorBody?.error === "string" && /context/i.test(errorBody.error)) {
+      if (errorText !== undefined && /context/i.test(errorText)) {
         priceUrl = `${priceUrl}&context=sep6`;
         res = await fetchWithTimeout(priceUrl, {}, opts.timeoutMs);
       }
     }
 
     if (!res.ok) {
-      let errorBody: any;
+      let errorText: string | undefined;
       try {
-        errorBody = await res.json();
+        errorText = errorMessageOf(await res.json());
       } catch {
         // ignore parse error if response is not JSON
       }
 
       const isClientParamError =
         res.status === 400 &&
-        typeof errorBody?.error === "string" &&
-        /missing|required|invalid|unsupported|parameter/i.test(errorBody.error);
+        errorText !== undefined &&
+        /missing|required|invalid|unsupported|parameter/i.test(errorText);
 
       if (isClientParamError) {
         results.push({
@@ -441,28 +453,28 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           description: "GET /price request parameters accepted by anchor",
           status: "warn",
           severity: "warning",
-          message: `Anchor rejected request parameters with HTTP 400: "${errorBody.error}" (client request error or unsupported pair, not anchor schema defect)`,
+          message: `Anchor rejected request parameters with HTTP 400: "${errorText}" (client request error or unsupported pair, not anchor schema defect)`,
         });
         results.push({
           id: "sep38.price_schema",
           description: "GET /price returns well-formed JSON matching SEP-38 schema",
           status: "warn",
           severity: "warning",
-          message: `Skipped schema check: GET /price was rejected due to client request parameter: "${errorBody.error}"`,
+          message: `Skipped schema check: GET /price was rejected due to client request parameter: "${errorText}"`,
         });
         results.push({
           id: "sep38.price_positive",
           description: "GET /price returned price is a positive number",
           status: "warn",
           severity: "warning",
-          message: `Skipped price check: GET /price was rejected due to client request parameter: "${errorBody.error}"`,
+          message: `Skipped price check: GET /price was rejected due to client request parameter: "${errorText}"`,
         });
         results.push({
           id: "sep38.price_expires_at",
           description: "GET /price expires_at (when present) is a valid, future timestamp",
           status: "warn",
           severity: "warning",
-          message: `Skipped expires_at check: GET /price was rejected due to client request parameter: "${errorBody.error}"`,
+          message: `Skipped expires_at check: GET /price was rejected due to client request parameter: "${errorText}"`,
         });
       } else if (res.status >= 500) {
         results.push({
@@ -492,7 +504,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           description: "GET /price returns well-formed JSON matching SEP-38 schema",
           status: "fail",
           severity: "error",
-          message: `GET /price returned HTTP ${res.status}${errorBody?.error ? `: ${errorBody.error}` : ""}`,
+          message: `GET /price returned HTTP ${res.status}${errorText ? `: ${errorText}` : ""}`,
         });
         results.push({
           id: "sep38.price_positive",
@@ -755,17 +767,17 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       );
 
       if (!res.ok) {
-        let errorBody: any;
+        let errorText: string | undefined;
         try {
-          errorBody = await res.json();
+          errorText = errorMessageOf(await res.json());
         } catch {
           // ignore parse error if response is not JSON
         }
 
         const isClientParamError =
           res.status === 400 &&
-          typeof errorBody?.error === "string" &&
-          /missing|required|invalid|unsupported|parameter|delivery/i.test(errorBody.error);
+          errorText !== undefined &&
+          /missing|required|invalid|unsupported|parameter|delivery/i.test(errorText);
 
         if (isClientParamError) {
           for (const id of quoteCheckIds) {
@@ -774,7 +786,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
               description: quoteCheckDescriptions[id],
               status: "warn",
               severity: "warning",
-              message: `Skipped: POST /quote was rejected due to client request parameter: "${errorBody.error}"`,
+              message: `Skipped: POST /quote was rejected due to client request parameter: "${errorText}"`,
             });
           }
         } else if (res.status >= 500) {
@@ -794,7 +806,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
               description: quoteCheckDescriptions[id],
               status: "fail",
               severity: "error",
-              message: `POST /quote returned HTTP ${res.status}${errorBody?.error ? `: ${errorBody.error}` : ""}`,
+              message: `POST /quote returned HTTP ${res.status}${errorText ? `: ${errorText}` : ""}`,
             });
           }
         }

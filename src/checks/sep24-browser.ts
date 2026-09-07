@@ -27,7 +27,14 @@ export async function runSep24BrowserChecks(
     if (opts.browserLauncher) {
       browser = await opts.browserLauncher();
     } else {
-      let playwrightModule: any;
+      // Typed to the one export this uses rather than `any`. The `default` arm covers
+      // the CJS/ESM interop shape, where the namespace object wraps the real module.
+      // `typeof import(...)` is erased at compile time, so this adds no runtime
+      // dependency on playwright, which is optional.
+      let playwrightModule: {
+        chromium?: typeof import("playwright").chromium;
+        default?: { chromium?: typeof import("playwright").chromium };
+      };
       try {
         playwrightModule = await import("playwright");
       } catch {
@@ -43,6 +50,21 @@ export async function runSep24BrowserChecks(
       }
       const chromium =
         playwrightModule.chromium ?? playwrightModule.default?.chromium;
+      if (!chromium) {
+        // The module resolved but exposes no chromium export, so the install is broken
+        // rather than absent. Reported like the other skips: without this the call below
+        // threw a TypeError that surfaced as "Failed to launch headless browser: Cannot
+        // read properties of undefined", which named the symptom and not the cause.
+        results.push({
+          id: "sep24.interactive_browser_launch",
+          description: "Launch headless browser and navigate to interactive URL",
+          status: "warn",
+          severity: "warning",
+          message:
+            'Browser launch skipped: the installed "playwright" module exposes no chromium export. Reinstall with "npm install playwright && npx playwright install chromium".',
+        });
+        return { results };
+      }
       browser = await chromium.launch({ headless: true });
     }
   } catch (err) {
