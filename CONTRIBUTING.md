@@ -67,7 +67,7 @@ npm install
 After compiling with `npm run build`, execute the CLI using `node`:
 
 ```bash
-node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json]
+node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json|html]
 ```
 
 Example against Stellar's testnet reference anchor:
@@ -86,6 +86,7 @@ The codebase is structured as a single package designed for modular extension:
 sep-compliance-validator/
   src/
     cli.ts            # Commander CLI entrypoint: defines `check <domain>`
+    index.ts          # Public programmatic API exports and types
     checks/           # Per-SEP checker implementations
       sep1.ts         # SEP-1 (stellar.toml) discovery and validation
       sep1-currencies.ts  # [[CURRENCIES]] asset table validation
@@ -107,7 +108,7 @@ sep-compliance-validator/
   registry/           # Anchor opt-in registry (see registry/README.md)
   scripts/            # Registry tooling and the dashboard crawler (scripts/crawl/)
   test/               # Unit tests (Vitest) — one suite per checker, plus core,
-                      # renderers, CLI options, registry, and crawler
+                      # renderers, CLI options, public API exports, registry, and crawler
   ARCHITECTURE.md     # Technical stack and architecture details
   PRD.md              # Requirements and scope document
   package.json
