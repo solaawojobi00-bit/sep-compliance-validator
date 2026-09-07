@@ -116,6 +116,91 @@ jobs:
       if: always()
       run: npm audit || true
 
+  # Everything else here tests the repo, where every file is present and node_modules is
+  # fully installed. Neither describes what `npm i sep-compliance-validator` produces:
+  # package.json ships a `files: ["dist"]` whitelist, so anything the CLI needs at runtime
+  # that lives outside dist/, or any runtime import that sits in devDependencies, breaks
+  # only for users and never in CI.
+  pack-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 22.x
+      uses: actions/setup-node@v7
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    # prepack runs the build, so the tarball is compiled from this commit's source.
+    - name: Pack the tarball
+      run: |
+        set -euo pipefail
+        npm pack --pack-destination "$RUNNER_TEMP"
+        ls -l "$RUNNER_TEMP"/sep-compliance-validator-*.tgz
+
+    # Installed into a directory outside the repo on purpose. Installing in place would
+    # resolve imports against the repo's own node_modules and prove nothing.
+    - name: Install the tarball into a clean project
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/consumer"
+        cd "$RUNNER_TEMP/consumer"
+        npm init -y >/dev/null
+        npm install "$RUNNER_TEMP"/sep-compliance-validator-*.tgz
+
+    - name: The installed CLI runs
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/consumer"
+        npx sep-compliance-validator --help >/dev/null
+        # Proves package.json is readable at runtime, not just present in the tarball.
+        test "$(npx sep-compliance-validator --version)" = "$(node -p "require('./node_modules/sep-compliance-validator/package.json').version")"
+
+    - name: The installed bin is executable and kept its shebang
+      run: |
+        set -euo pipefail
+        cli="$RUNNER_TEMP/consumer/node_modules/sep-compliance-validator/dist/cli.js"
+        # tsc does not set the exec bit; npm does it at install time for `bin` entries.
+        # If that ever stops happening the CLI fails with a bare "Permission denied".
+        test -x "$RUNNER_TEMP/consumer/node_modules/.bin/sep-compliance-validator"
+        head -1 "$cli" | grep -qx '#!/usr/bin/env node'
+
+    - name: The installed CLI exits 1 on a non-conformant anchor
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/consumer"
+        # An unresolvable domain needs no network and fails every check. The assertion is
+        # that the packaged CLI *runs* and reports correctly -- exit 1 is the right answer
+        # here, so `set -e` needs it captured rather than treated as a failure. A 2 would
+        # mean the CLI rejected its own invocation, which is a different bug entirely.
+        status=0
+        npx sep-compliance-validator check nonexistent.invalid --only sep1 --format json >/dev/null 2>&1 || status=$?
+        test "$status" -eq 1
+
+    # playwright is an optionalDependency, used only by --interactive-browser. A consumer
+    # installing with --omit=optional, or on a platform where it fails to install, must
+    # still get every non-browser check. This catches a top-level import of it leaking
+    # into a path that does not need one.
+    - name: The CLI works without optional dependencies
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/consumer-noopt"
+        cd "$RUNNER_TEMP/consumer-noopt"
+        npm init -y >/dev/null
+        npm install --omit=optional "$RUNNER_TEMP"/sep-compliance-validator-*.tgz
+        test ! -d node_modules/playwright
+        npx sep-compliance-validator --help >/dev/null
+        status=0
+        npx sep-compliance-validator check nonexistent.invalid --only sep1 --format json >/dev/null 2>&1 || status=$?
+        test "$status" -eq 1
+
   # Proves the composite Action's own plumbing: it runs the CLI, writes a report, sets its
   # outputs, renders the report, and propagates the exit status. Deliberately hermetic —
   # the live-anchor run lives in live-anchor.yml so a third party's uptime cannot block a PR.
