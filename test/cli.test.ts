@@ -350,7 +350,11 @@ ANCHOR_QUOTE_SERVER = "https://sep38.example.com"
 });
 
 describe("CLI subprocess integration and input validation", () => {
-  it("rejects invalid --format with code 2", async () => {
+  // The one surviving subprocess test. It is here for the process boundary itself, not
+  // for the validation rule: that `process.exitCode = 2` set inside runCheckAction
+  // actually becomes a real exit status, and that the message reaches real stderr rather
+  // than being swallowed. No in-process assertion can prove either.
+  it("propagates exit code 2 and the error message through a real process boundary", async () => {
     try {
       await execAsync(`${cliPath} check example.com --format xml`);
       expect.fail("Expected CLI to exit with code 2");
@@ -360,75 +364,15 @@ describe("CLI subprocess integration and input validation", () => {
     }
   });
 
-  it("rejects invalid --network with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --network mars`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid network "mars"');
-    }
-  });
-
-  it("rejects non-numeric --timeout with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --timeout abc`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid timeout "abc"');
-    }
-  });
-
-  it("rejects non-positive --timeout 0 with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --timeout 0`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid timeout "0"');
-    }
-  });
-
-  it("rejects mainnet without confirmation flag with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --network mainnet`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain("Running checks against mainnet touches production");
-    }
-  });
-
-  it("rejects non-numeric --memo with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --memo notdigits`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid memo "notdigits"');
-    }
-  });
-
-  it("rejects simultaneous --memo and --muxed with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --memo 12345 --muxed`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain("Cannot specify both --memo and --muxed");
-    }
-  });
-
-  it("rejects invalid SEP in --only with code 2", async () => {
-    try {
-      await execAsync(`${cliPath} check example.com --only sep99`);
-      expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid SEP in --only: "sep99"');
-    }
-  });
+  // The other seven argument-validation cases that used to spawn a subprocess here
+  // (--network, --timeout non-numeric, --timeout 0, mainnet unconfirmed, --memo,
+  // --memo with --muxed, --only) are already asserted in-process against
+  // runCheckAction in the "runCheckAction in-process branch coverage" block above,
+  // which checks the same exit code and the same message. Each cold `node dist/cli.js`
+  // costs 2-5s of startup and module loading to re-prove a branch already covered, and
+  // under vitest's parallel file execution that was enough to cross the 20s testTimeout
+  // on slower machines while passing in CI. Removing the duplicates loses no coverage;
+  // keeping one preserves what in-process assertions genuinely cannot.
 
   it("fails sep1.web_auth_endpoint when WEB_AUTH_ENDPOINT is not a valid absolute URL", () => {
     const rawToml = `

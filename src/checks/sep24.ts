@@ -1,3 +1,4 @@
+import type { Browser } from "playwright";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
 import type { StellarToml } from "./sep1.js";
@@ -9,6 +10,17 @@ export interface Sep24Options {
   jwt: string;
   timeoutMs?: number;
   interactiveBrowser?: boolean;
+  /**
+   * Supplies the browser instead of launching a real Chromium. Only tests pass this;
+   * the CLI never does, so production behaviour is unchanged.
+   *
+   * Without it, a test reaching the browser path through `runSep24Checks` has no way to
+   * avoid a real `chromium.launch()` — which makes the test mean different things on
+   * different machines: real coverage where Chromium is installed, and a no-op skip
+   * result where it is not (including CI). `Sep24BrowserOptions.browserLauncher` already
+   * existed for this; it was simply unreachable from here.
+   */
+  browserLauncher?: () => Promise<Browser>;
 }
 
 export const VALID_SEP24_STATUSES = [
@@ -940,6 +952,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
     const browserResult = await runSep24BrowserChecks({
       interactiveUrl: deposit.interactiveUrl,
       timeoutMs: opts.timeoutMs,
+      browserLauncher: opts.browserLauncher,
     });
     results.push(...browserResult.results);
   }
