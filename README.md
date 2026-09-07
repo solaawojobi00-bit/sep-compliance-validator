@@ -168,10 +168,10 @@ The action:
 
 ## Publishing to npm
 
-The repository includes a GitHub Actions workflow (`.github/workflows/publish.yml`) that automates publishing releases to npm when a version tag (e.g. `v0.1.0`) is pushed.
+Releases are versioned and tagged automatically on `main` via semantic-release (`.github/workflows/release.yml`). Publishing the package to npm is a manual, deliberate action triggered via `workflow_dispatch` in `.github/workflows/publish.yml`, which verifies the commit matches a released version tag, generates an npm provenance attestation (`--provenance`), and publishes using the `NPM_TOKEN` secret.
 
 > [!NOTE]
-> Automated publishing requires the repository secret `NPM_TOKEN` to be configured with an npm access token that has publishing permissions for `sep-compliance-validator`.
+> Publishing requires the repository secret `NPM_TOKEN` to be configured with an npm access token that has publishing permissions for `sep-compliance-validator`.
 
 ## Contributing & Development
 

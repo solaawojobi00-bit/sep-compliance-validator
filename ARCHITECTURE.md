@@ -30,8 +30,7 @@
   - Native JSON serializer for structured machine-readable reports (`output/json.ts`).
   - Standalone HTML document generator with embedded responsive CSS styles (`output/html.ts`).
 - **Testing:** `vitest` with v8 coverage tracking across unit, integration, and CLI entry points.
-- **Package distribution & CI:** published to npm (`sep-compliance-validator`) and packaged as
-  a reusable composite GitHub Action (`action.yml`).
+- **Package distribution & CI:** automated semantic versioning (`semantic-release`), manual npm publishing with OIDC provenance attestations (`--provenance`), and packaged as a reusable composite GitHub Action (`action.yml`). Supply chain and security gating via Actionlint, CodeQL, Gitleaks, and packaging smoke testing.
 
 ## Why this stack
 
@@ -73,6 +72,7 @@ sep-compliance-validator/
   action.yml            # Composite GitHub Action entrypoint
   src/
     cli.ts              # commander CLI entrypoint, option parsing, and execution dispatch
+    index.ts            # Public programmatic API exports and types
     checks/
       sep1.ts           # stellar.toml fetch, CORS, size, and field validation
       sep1-currencies.ts # [[CURRENCIES]] asset definitions validation
@@ -109,18 +109,29 @@ sep-compliance-validator/
       prune-retention.mjs   # 90-day detail retention
       storage-paths.mjs     # Archive layout and path-safety validation
       inconclusive-ids.mjs  # INTERIM: classifies "unverified" warns (superseded by #124)
-  test/                 # vitest suites covering checks, core, renderers, CLI, registry, crawler
+  test/                 # vitest suites covering checks, core, renderers, CLI, public API, registry, crawler
   .github/workflows/
-    ci.yml              # Build, test, lint, typecheck, coverage, action smoke tests
+    ci.yml              # Build, test, lint, typecheck, coverage, actionlint, pack & action smoke tests
+    codeql.yml          # CodeQL security analysis
     dashboard-crawl.yml # Daily anchor crawl (0 0 * * *)
-    registry-validate.yml # Registry schema + domain reachability gates on PRs
+    dependency-review.yml # Dependency review on pull requests
     live-anchor.yml     # Scheduled run against the live testnet reference anchor
-    publish.yml         # npm publish on version tag
+    publish.yml         # npm publish on manual dispatch with provenance attestation
+    registry-validate.yml # Registry schema + domain reachability gates on PRs
+    release.yml         # Semantic-release automated versioning and tagging on main
+    secret-scan.yml     # Gitleaks credential scanning on push and PR
   docs/
     dashboard-design.md # Architecture and data model for hosted dashboard web app
+  .gitleaks.toml
+  .releaserc.json
+  eslint.config.js
   package.json
   tsconfig.json
+  tsconfig.test.json
   vitest.config.ts
+  LICENSE
+  SECURITY.md
+  CODE_OF_CONDUCT.md
   README.md
   PRD.md
   ARCHITECTURE.md
