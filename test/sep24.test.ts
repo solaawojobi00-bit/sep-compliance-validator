@@ -1,6 +1,80 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Browser } from "playwright";
 import { runSep24Checks } from "../src/checks/sep24.js";
 import type { StellarToml } from "../src/checks/sep1.js";
+
+/**
+ * A stand-in for a Playwright Browser, implementing only the surface
+ * runSep24BrowserChecks actually touches.
+ *
+ * The browser check's own behaviour is covered directly in sep24-browser.test.ts, which
+ * has always injected fakes. What this file covers is the *wiring*: that runSep24Checks
+ * threads a launcher through to runSep24BrowserChecks and merges its results into the
+ * report. That wiring is what could not be tested before, because Sep24Options had no
+ * browserLauncher field to thread.
+ *
+ * Using a fake here also makes the test mean the same thing everywhere. With a real
+ * `chromium.launch()` the outcome depended on the machine: a genuine navigation where
+ * Chromium is installed, and a "skipped, binary missing" warn where it is not — and the
+ * old assertion, that *some* result with the id prefix existed, was satisfied by either.
+ */
+function makeFakeBrowser(opts: {
+  initialUrl: string;
+  status?: number;
+  forms?: number;
+  visibleInputs?: number;
+  finalUrl?: string;
+}) {
+  const status = opts.status ?? 200;
+  const forms = opts.forms ?? 1;
+  const visibleInputs = opts.visibleInputs ?? 1;
+  const closed = { page: false, browser: false };
+
+  const locator = (selector: string) => {
+    // Only the counts matter to the check: forms/inputs drive form detection, and a
+    // submit-button count of 0 keeps the optional click path out of this test.
+    let count = 0;
+    if (selector === "form") count = forms;
+    else if (selector.startsWith("input:not([type=hidden])")) count = visibleInputs;
+
+    const handle = {
+      count: async () => count,
+      getAttribute: async (name: string) => (name === "type" ? "text" : ""),
+      fill: async () => {},
+      click: async () => {},
+    };
+    return {
+      count: async () => count,
+      nth: () => handle,
+      first: () => ({ ...handle, count: async () => 0 }),
+    };
+  };
+
+  const page = {
+    setDefaultTimeout: () => {},
+    exposeFunction: async () => {},
+    addInitScript: async () => {},
+    goto: async () => ({
+      ok: () => status >= 200 && status < 300,
+      status: () => status,
+    }),
+    locator,
+    waitForTimeout: async () => {},
+    url: () => opts.finalUrl ?? opts.initialUrl,
+    close: async () => {
+      closed.page = true;
+    },
+  };
+
+  const browser = {
+    newPage: async () => page,
+    close: async () => {
+      closed.browser = true;
+    },
+  };
+
+  return { browser: browser as unknown as Browser, closed };
+}
 
 describe("runSep24Checks", () => {
   afterEach(() => {
@@ -758,19 +832,44 @@ describe("runSep24Checks", () => {
       throw new Error(`Unexpected URL: ${url}`);
     }) as unknown as typeof fetch;
 
+    const fake = makeFakeBrowser({ initialUrl: interactiveUrl });
+    let launcherCalls = 0;
+
     const results = await runSep24Checks({
       domain,
       toml: validToml,
       network: "testnet",
       jwt,
       interactiveBrowser: true,
+      browserLauncher: async () => {
+        launcherCalls += 1;
+        return fake.browser;
+      },
     });
 
-    const browserCheck = results.find((r) =>
-      r.id.startsWith("sep24.interactive_browser_"),
+    // The injected launcher was used, so no real Chromium was started.
+    expect(launcherCalls).toBe(1);
+
+    // Assert the navigation actually succeeded, rather than that *some* result with the
+    // id prefix exists. The old assertion was satisfied by the skip result, which is
+    // what CI produced every time.
+    const launch = results.find((r) => r.id === "sep24.interactive_browser_launch");
+    expect(launch?.status).toBe("pass");
+    expect(launch?.message).toContain("HTTP 200");
+
+    // The stubbed page reports one form and one visible input.
+    const formDetected = results.find((r) => r.id === "sep24.interactive_form_detected");
+    expect(formDetected?.status).toBe("pass");
+
+    // No postMessage and no redirect, so the completion callback is a warning.
+    const callback = results.find(
+      (r) => r.id === "sep24.interactive_completion_callback",
     );
-    expect(browserCheck).toBeDefined();
-  }, 35000);
+    expect(callback?.status).toBe("warn");
+
+    expect(fake.closed.browser).toBe(true);
+  });
+
 
   describe("GET /transactions list endpoint", () => {
     it("passes every list check against a conformant anchor and sends the JWT", async () => {
