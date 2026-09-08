@@ -517,9 +517,9 @@ describe("runSep12Checks", () => {
     });
 
     expect(capturedBody).toBeDefined();
-    expect(capturedBody.first_name).toBe("SEPVALIDATOR");
-    expect(capturedBody.last_name).toMatch(/^Run-[a-f0-9]{8}$/);
-    expect(capturedBody.email_address).toMatch(/^sepvalidator-[a-f0-9]{8}@invalid\.test$/);
+    expect(capturedBody?.first_name).toBe("SEPVALIDATOR");
+    expect(capturedBody?.last_name).toMatch(/^Run-[a-f0-9]{8}$/);
+    expect(capturedBody?.email_address).toMatch(/^sepvalidator-[a-f0-9]{8}@invalid\.test$/);
   });
 
   it("surfaces fields/provided_fields findings from the GET /customer response", async () => {
