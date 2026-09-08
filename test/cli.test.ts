@@ -358,9 +358,10 @@ describe("CLI subprocess integration and input validation", () => {
     try {
       await execAsync(`${cliPath} check example.com --format xml`);
       expect.fail("Expected CLI to exit with code 2");
-    } catch (err: any) {
-      expect(err.code).toBe(2);
-      expect(err.stderr).toContain('Invalid format "xml"');
+    } catch (err) {
+      const execError = err as { code?: number; stderr?: string };
+      expect(execError.code).toBe(2);
+      expect(execError.stderr).toContain('Invalid format "xml"');
     }
   });
 

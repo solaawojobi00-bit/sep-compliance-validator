@@ -528,7 +528,7 @@ describe("runSep38Checks", () => {
   const buyAssetId = "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
   function makeFetchMock(handlers: {
-    quotePost?: (body: any, hasAuth: boolean) => Response | Promise<Response>;
+    quotePost?: (body: unknown, hasAuth: boolean) => Response | Promise<Response>;
     quoteGet?: (id: string) => Response | Promise<Response>;
   }) {
     return vi.fn().mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {

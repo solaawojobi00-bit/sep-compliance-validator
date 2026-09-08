@@ -30,12 +30,7 @@ export default tseslint.config(
 
       "@typescript-eslint/consistent-type-imports": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
-
-      // Next ratchet, deliberately not enabled here: `no-explicit-any` currently reports
-      // 34 sites (11 in src/, 23 in test/). They are type-design decisions — SDK
-      // challenge-transaction types, untyped anchor error bodies, and the extra `jwt` /
-      // `challengeXdr` properties smuggled on the SEP-10 results array in cli.ts — and
-      // changing production types belongs in its own reviewable PR, not a CI change.
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
 );

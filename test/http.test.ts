@@ -55,11 +55,8 @@ describe("core/http", () => {
 
   it("surfaces mapped cause ENOTFOUND with explanation and details", async () => {
     global.fetch = vi.fn(async () => {
-      const cause = new Error("getaddrinfo ENOTFOUND bad.domain");
-      (cause as any).code = "ENOTFOUND";
-      const err = new TypeError("fetch failed");
-      (err as any).cause = cause;
-      throw err;
+      const cause = Object.assign(new Error("getaddrinfo ENOTFOUND bad.domain"), { code: "ENOTFOUND" });
+      throw new TypeError("fetch failed", { cause });
     });
 
     await expect(fetchWithTimeout("https://bad.domain/stellar.toml")).rejects.toThrow(
@@ -69,11 +66,8 @@ describe("core/http", () => {
 
   it("surfaces mapped cause ECONNREFUSED with explanation and code", async () => {
     global.fetch = vi.fn(async () => {
-      const cause = new Error("connect ECONNREFUSED 127.0.0.1:80");
-      (cause as any).code = "ECONNREFUSED";
-      const err = new TypeError("fetch failed");
-      (err as any).cause = cause;
-      throw err;
+      const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:80"), { code: "ECONNREFUSED" });
+      throw new TypeError("fetch failed", { cause });
     });
 
     await expect(fetchWithTimeout("https://localhost/api")).rejects.toThrow(
@@ -83,11 +77,8 @@ describe("core/http", () => {
 
   it("surfaces TLS certificate cause CERT_HAS_EXPIRED with explanation and code", async () => {
     global.fetch = vi.fn(async () => {
-      const cause = new Error("certificate has expired");
-      (cause as any).code = "CERT_HAS_EXPIRED";
-      const err = new TypeError("fetch failed");
-      (err as any).cause = cause;
-      throw err;
+      const cause = Object.assign(new Error("certificate has expired"), { code: "CERT_HAS_EXPIRED" });
+      throw new TypeError("fetch failed", { cause });
     });
 
     await expect(fetchWithTimeout("https://expired.example.com/stellar.toml")).rejects.toThrow(
@@ -97,11 +88,8 @@ describe("core/http", () => {
 
   it("surfaces unmapped cause retaining raw code and message rather than bare fetch failed", async () => {
     global.fetch = vi.fn(async () => {
-      const cause = new Error("No route to host");
-      (cause as any).code = "EHOSTUNREACH";
-      const err = new TypeError("fetch failed");
-      (err as any).cause = cause;
-      throw err;
+      const cause = Object.assign(new Error("No route to host"), { code: "EHOSTUNREACH" });
+      throw new TypeError("fetch failed", { cause });
     });
 
     await expect(fetchWithTimeout("https://unreachable.example.com")).rejects.toThrow(
@@ -111,12 +99,9 @@ describe("core/http", () => {
 
   it("inspects AggregateError cause and surfaces first error", async () => {
     global.fetch = vi.fn(async () => {
-      const causeErr = new Error("getaddrinfo ENOTFOUND fail.org");
-      (causeErr as any).code = "ENOTFOUND";
+      const causeErr = Object.assign(new Error("getaddrinfo ENOTFOUND fail.org"), { code: "ENOTFOUND" });
       const aggErr = new AggregateError([causeErr], "Multiple connection failures");
-      const err = new TypeError("fetch failed");
-      (err as any).cause = aggErr;
-      throw err;
+      throw new TypeError("fetch failed", { cause: aggErr });
     });
 
     await expect(fetchWithTimeout("https://fail.org")).rejects.toThrow(
@@ -158,11 +143,8 @@ describe("core/http", () => {
     setVerbose(true);
 
     global.fetch = vi.fn(async () => {
-      const cause = new Error("connect ECONNREFUSED 127.0.0.1:80");
-      (cause as any).code = "ECONNREFUSED";
-      const err = new TypeError("fetch failed");
-      (err as any).cause = cause;
-      throw err;
+      const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:80"), { code: "ECONNREFUSED" });
+      throw new TypeError("fetch failed", { cause });
     });
 
     try {

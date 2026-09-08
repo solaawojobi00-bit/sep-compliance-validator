@@ -493,10 +493,10 @@ describe("runSep12Checks", () => {
   });
 
   it("uses randomized synthetic identities with @invalid.test emails", async () => {
-    let capturedBody: any;
+    let capturedBody: Record<string, string> | undefined;
     global.fetch = vi.fn(async (_input, init) => {
       if (init?.method === "PUT") {
-        const body = JSON.parse(init.body as string);
+        const body = JSON.parse(init.body as string) as Record<string, string>;
         if (body.email_address !== "not-an-email-address") {
           capturedBody = body;
         }
