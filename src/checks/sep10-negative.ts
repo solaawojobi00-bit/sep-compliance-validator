@@ -294,9 +294,12 @@ export async function runSep10NegativeChecks(
     const tx = TransactionBuilder.fromXDR(baseChallengeXdr, networkPassphrase);
     const envelope = tx.toEnvelope();
     if ("v1" in envelope && envelope.v1) {
-      envelope.v1.tx.operations[0].body.manageDataOp.dataValue = new xdr.DataValue(
-        Buffer.from("tampered-nonce-tampered-nonce-tampered-nonce!"),
-      );
+      const op0Body = envelope.v1.tx.operations[0].body;
+      if ("manageDataOp" in op0Body) {
+        op0Body.manageDataOp.dataValue = new xdr.DataValue(
+          Buffer.from("tampered-nonce-tampered-nonce-tampered-nonce!"),
+        );
+      }
     }
 
     const tamperedTx = TransactionBuilder.fromXDR(
