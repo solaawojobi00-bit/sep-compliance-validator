@@ -203,11 +203,11 @@ export async function runCheckAction(
         results.push(...sep10Results);
 
         const sep10Succeeded =
-          Boolean((sep10Results as any).jwt) &&
+          Boolean(sep10Results.jwt) &&
           !sep10Results.some((r) => r.status === "fail");
 
         if (sep10Succeeded) {
-          jwt = (sep10Results as any).jwt;
+          jwt = sep10Results.jwt;
           const sep10NegResults = await guardChecker(
             "sep10.negative",
             "Run SEP-10 negative-case challenge validation",
@@ -217,8 +217,8 @@ export async function runCheckAction(
                 domain,
                 network,
                 serverSigningKey: toml!.signingKey!,
-                challengeXdr: (sep10Results as any).challengeXdr,
-                clientKeypair: (sep10Results as any).clientKeypair,
+                challengeXdr: sep10Results.challengeXdr,
+                clientKeypair: sep10Results.clientKeypair,
                 timeoutMs,
               });
             },
