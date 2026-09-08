@@ -28,7 +28,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^13.1.0",
+    "@stellar/stellar-sdk": "^17.0.1",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "jose": "^6.2.10",

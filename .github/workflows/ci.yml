@@ -98,19 +98,14 @@ jobs:
 
     # Two audits with different jobs.
     #
-    # Blocking: the production tree only, at critical. `files: ["dist"]` means the dev
+    # Blocking: the production tree only, at high. `files: ["dist"]` means the dev
     # tree never reaches a consumer, so gating on it would turn CI red for eslint's
-    # transitive advisories and train everyone to ignore the check. Critical rather than
-    # high because the tree currently carries two high advisories in toml, pulled in by
-    # @stellar/stellar-sdk, whose only fix is a 13 -> 17 major upgrade. Those are not
-    # reachable here — untrusted stellar.toml is parsed by smol-toml, and
-    # StellarTomlResolver is never imported — but they are real, and gating at high today
-    # would block every unrelated pull request on an upgrade nobody has done yet.
+    # transitive advisories and train everyone to ignore the check.
     #
     # Advisory: the full tree, reported and never failing, so the dev-side backlog stays
     # visible instead of invisible.
     - name: Audit production dependencies
-      run: npm audit --omit=dev --audit-level=critical
+      run: npm audit --omit=dev --audit-level=high
 
     - name: Audit full dependency tree (advisory)
       if: always()
