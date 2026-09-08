@@ -296,9 +296,11 @@ export async function runSep10NegativeChecks(
     if ("v1" in envelope && envelope.v1) {
       const op0Body = envelope.v1.tx.operations[0].body;
       if ("manageDataOp" in op0Body) {
-        op0Body.manageDataOp.dataValue = new xdr.DataValue(
-          Buffer.from("tampered-nonce-tampered-nonce-tampered-nonce!"),
-        );
+        Object.assign(op0Body.manageDataOp, {
+          dataValue: new xdr.DataValue(
+            Buffer.from("tampered-nonce-tampered-nonce-tampered-nonce!"),
+          ),
+        });
       }
     }
 
