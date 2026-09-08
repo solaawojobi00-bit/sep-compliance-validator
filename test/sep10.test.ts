@@ -815,7 +815,7 @@ describe("SEP-10 JWT claims validation (iss, iat, sub)", () => {
           }),
         } as Response;
       }
-      const postBody = JSON.parse((init as any).body) as { transaction: string };
+      const postBody = JSON.parse(String(init?.body)) as { transaction: string };
       const { clientAccountID } = WebAuth.readChallengeTx(
         postBody.transaction,
         serverKeypair.publicKey(),

@@ -493,10 +493,10 @@ describe("runSep12Checks", () => {
   });
 
   it("uses randomized synthetic identities with @invalid.test emails", async () => {
-    let capturedBody: any;
+    let capturedBody: Record<string, string> | undefined;
     global.fetch = vi.fn(async (_input, init) => {
       if (init?.method === "PUT") {
-        const body = JSON.parse(init.body as string);
+        const body = JSON.parse(init.body as string) as Record<string, string>;
         if (body.email_address !== "not-an-email-address") {
           capturedBody = body;
         }
@@ -517,9 +517,9 @@ describe("runSep12Checks", () => {
     });
 
     expect(capturedBody).toBeDefined();
-    expect(capturedBody.first_name).toBe("SEPVALIDATOR");
-    expect(capturedBody.last_name).toMatch(/^Run-[a-f0-9]{8}$/);
-    expect(capturedBody.email_address).toMatch(/^sepvalidator-[a-f0-9]{8}@invalid\.test$/);
+    expect(capturedBody?.first_name).toBe("SEPVALIDATOR");
+    expect(capturedBody?.last_name).toMatch(/^Run-[a-f0-9]{8}$/);
+    expect(capturedBody?.email_address).toMatch(/^sepvalidator-[a-f0-9]{8}@invalid\.test$/);
   });
 
   it("surfaces fields/provided_fields findings from the GET /customer response", async () => {
