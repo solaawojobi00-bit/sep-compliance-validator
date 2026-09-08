@@ -1,4 +1,4 @@
-import type { Browser, Page } from "playwright";
+import type { Browser, BrowserType, Page } from "playwright";
 import type { CheckResult } from "../core/report.js";
 
 export interface Sep24BrowserOptions {
@@ -29,11 +29,11 @@ export async function runSep24BrowserChecks(
     } else {
       // Typed to the one export this uses rather than `any`. The `default` arm covers
       // the CJS/ESM interop shape, where the namespace object wraps the real module.
-      // `typeof import(...)` is erased at compile time, so this adds no runtime
+      // `BrowserType` is a type-only import erased at compile time, so this adds no runtime
       // dependency on playwright, which is optional.
       let playwrightModule: {
-        chromium?: typeof import("playwright").chromium;
-        default?: { chromium?: typeof import("playwright").chromium };
+        chromium?: BrowserType<Browser>;
+        default?: { chromium?: BrowserType<Browser> };
       };
       try {
         playwrightModule = await import("playwright");
