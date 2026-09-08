@@ -27,8 +27,17 @@ describe("HTML output renderer", () => {
         id: "sep10.jwt_signature",
         description: "Verify JWT signature via JWKS",
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: "Skipped: no JWKS endpoint declared",
+      },
+      {
+        id: "sep12.fields.unknown_name",
+        description: "field key should be a recognized SEP-9 field name",
+        status: "warn",
+        exercised: true,
+        severity: "warning",
+        message: '"photo_proof_of_income" is not a standard SEP-9 field name',
       },
       {
         id: "sep38.prices",
@@ -55,6 +64,26 @@ describe("HTML output renderer", () => {
     expect(html).toContain("JWT algorithm is &quot;EdDSA&quot;");
     expect(html).toContain("Skipped: no JWKS endpoint declared");
     expect(html).toContain("Endpoint returned HTTP 500");
+  });
+
+  it("badges a not-exercised warn as SKIP and an advisory warn as WARN", () => {
+    const html = renderHtml(sampleReport);
+
+    expect(html).toContain('<span class="badge status-skip">SKIP</span>');
+    expect(html).toContain('<span class="badge status-warn">WARN</span>');
+  });
+
+  it("counts advisory and not-exercised warns in separate cards", () => {
+    const html = renderHtml(sampleReport);
+
+    // One of each in the fixture, so a single "Warnings: 2" card would be the bug #124
+    // describes: it would read as two problems when only one is about the anchor.
+    expect(html).toContain("<div>Warnings</div>");
+    expect(html).toContain("<div>Not Exercised</div>");
+    const warnCard = html.slice(html.indexOf("<div>Warnings</div>"));
+    expect(warnCard).toMatch(/^<div>Warnings<\/div>\s*<div class="value">1<\/div>/);
+    const skipCard = html.slice(html.indexOf("<div>Not Exercised</div>"));
+    expect(skipCard).toMatch(/^<div>Not Exercised<\/div>\s*<div class="value">1<\/div>/);
   });
 
   it("shows the schema version in the metadata header", () => {

@@ -27,8 +27,17 @@ describe("output/table", () => {
         id: "sep1.signing_key",
         description: "SIGNING_KEY present",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: "Missing optional field",
+      },
+      {
+        id: "sep10.jwt_signature",
+        description: "Verify JWT signature via JWKS",
+        status: "warn",
+        exercised: false,
+        severity: "warning",
+        message: "Skipped: no JWKS endpoint declared",
       },
     ],
   };
@@ -43,7 +52,28 @@ describe("output/table", () => {
     expect(tableStr).toContain("sep1.stellar_toml_exists");
     expect(tableStr).toContain("sep10.challenge");
     expect(tableStr).toContain("sep1.signing_key");
-    expect(tableStr).toContain("1/3 passed, 1 failed, 1 warnings");
+    expect(tableStr).toContain("1/4 passed, 1 failed, 1 warnings, 1 not exercised");
+  });
+
+  it("renders a not-exercised warn as SKIP, not WARN", () => {
+    const tableStr = renderTable(mockReport);
+
+    // The advisory warn keeps WARN; the not-exercised one must be visibly distinct, or a
+    // terminal reader has the same "how many of these are problems?" question a dashboard
+    // does.
+    const skipRow = tableStr.split("\n").find((line) => line.includes("sep10.jwt_signature"));
+    expect(skipRow).toContain("SKIP");
+    expect(skipRow).not.toContain("WARN");
+  });
+
+  it("omits the not-exercised count when there are none", () => {
+    const clean: Report = {
+      ...mockReport,
+      results: mockReport.results.filter((r) => r.status !== "warn" || r.exercised !== false),
+    };
+
+    expect(renderTable(clean)).toContain("1/3 passed, 1 failed, 1 warnings\n");
+    expect(renderTable(clean)).not.toContain("not exercised");
   });
 
   it("printTable logs rendered table to console.log", () => {

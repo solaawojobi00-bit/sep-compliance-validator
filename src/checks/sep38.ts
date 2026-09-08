@@ -46,6 +46,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.skipped",
       description: "Run SEP-38 quote endpoint checks",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: ANCHOR_QUOTE_SERVER missing from stellar.toml",
     });
@@ -206,6 +207,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.prices_request_error",
           description: "GET /prices request parameters accepted by anchor",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Anchor rejected request parameters with HTTP 400: "${errorText}" (client request error, not anchor schema defect)`,
         });
@@ -213,6 +215,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.prices_schema",
           description: "GET /prices returns well-formed JSON matching SEP-38 schema",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Skipped schema check: GET /prices was rejected due to client request parameter: "${errorText}"`,
         });
@@ -220,6 +223,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.prices_positive",
           description: "GET /prices returned prices are positive numbers",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Skipped prices check: GET /prices was rejected due to client request parameter: "${errorText}"`,
         });
@@ -228,6 +232,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.prices_schema",
           description: "GET /prices returns well-formed JSON matching SEP-38 schema",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `GET /prices returned HTTP ${res.status} (upstream server/gateway error; anchor quote server may be unavailable)`,
         });
@@ -235,6 +240,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.prices_positive",
           description: "GET /prices returned prices are positive numbers",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: "Cannot validate prices because GET /prices returned upstream server error",
         });
@@ -354,6 +360,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.price_schema",
       description: "GET /price returns well-formed JSON matching SEP-38 schema",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairMessage,
     });
@@ -361,6 +368,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.price_positive",
       description: "GET /price returned price is a positive number",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairMessage,
     });
@@ -368,6 +376,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.price_expires_at",
       description: "GET /price expires_at (when present) is a valid, future timestamp",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairMessage,
     });
@@ -375,6 +384,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_unauthenticated",
       description: "POST /quote without authentication is rejected",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairQuoteMessage,
     });
@@ -382,6 +392,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_schema",
       description: "POST /quote returns well-formed JSON matching SEP-38 firm quote schema",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairQuoteMessage,
     });
@@ -389,6 +400,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_positive",
       description: "POST /quote price and total_price are positive and consistent with amounts",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairQuoteMessage,
     });
@@ -396,6 +408,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_expires_at",
       description: "POST /quote expires_at is a valid, future timestamp",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairQuoteMessage,
     });
@@ -403,6 +416,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_get_matches",
       description: "GET /quote/{id} returns the same quote created by POST /quote",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairQuoteMessage,
     });
@@ -410,6 +424,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_get_nonexistent",
       description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: noPairQuoteMessage,
     });
@@ -452,6 +467,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_request_error",
           description: "GET /price request parameters accepted by anchor",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Anchor rejected request parameters with HTTP 400: "${errorText}" (client request error or unsupported pair, not anchor schema defect)`,
         });
@@ -459,6 +475,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_schema",
           description: "GET /price returns well-formed JSON matching SEP-38 schema",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Skipped schema check: GET /price was rejected due to client request parameter: "${errorText}"`,
         });
@@ -466,6 +483,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_positive",
           description: "GET /price returned price is a positive number",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Skipped price check: GET /price was rejected due to client request parameter: "${errorText}"`,
         });
@@ -473,6 +491,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_expires_at",
           description: "GET /price expires_at (when present) is a valid, future timestamp",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Skipped expires_at check: GET /price was rejected due to client request parameter: "${errorText}"`,
         });
@@ -481,6 +500,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_schema",
           description: "GET /price returns well-formed JSON matching SEP-38 schema",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `GET /price returned HTTP ${res.status} (upstream server/gateway error; anchor quote server may be unavailable)`,
         });
@@ -488,6 +508,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_positive",
           description: "GET /price returned price is a positive number",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: "Cannot validate price because GET /price returned upstream server error",
         });
@@ -495,6 +516,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.price_expires_at",
           description: "GET /price expires_at (when present) is a valid, future timestamp",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: "Cannot validate expires_at because GET /price returned upstream server error",
         });
@@ -651,6 +673,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_unauthenticated",
       description: "POST /quote without authentication is rejected",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: --no-write mode enabled; mutating POST /quote request omitted",
     });
@@ -692,6 +715,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.quote_unauthenticated",
           description: "POST /quote without authentication is rejected",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Anchor returned HTTP ${res.status} for unauthenticated POST /quote (expected 401 or 403); inconclusive`,
         });
@@ -732,6 +756,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
         id,
         description: quoteCheckDescriptions[id],
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: "Skipped: SEP-10 JWT required to create a firm quote",
       });
@@ -742,6 +767,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
         id,
         description: quoteCheckDescriptions[id],
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: "Skipped: --no-write mode enabled; mutating POST /quote request omitted",
       });
@@ -785,6 +811,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
               id,
               description: quoteCheckDescriptions[id],
               status: "warn",
+              exercised: false,
               severity: "warning",
               message: `Skipped: POST /quote was rejected due to client request parameter: "${errorText}"`,
             });
@@ -795,6 +822,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
               id,
               description: quoteCheckDescriptions[id],
               status: "warn",
+              exercised: false,
               severity: "warning",
               message: `Cannot validate: POST /quote returned HTTP ${res.status} (upstream server/gateway error; anchor quote server may be unavailable)`,
             });
@@ -962,6 +990,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_get_matches",
       description: "GET /quote/{id} returns the same quote created by POST /quote",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: SEP-10 JWT required to fetch a firm quote",
     });
@@ -970,6 +999,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_get_matches",
       description: "GET /quote/{id} returns the same quote created by POST /quote",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: --no-write mode enabled; no quote created to fetch by id",
     });
@@ -978,6 +1008,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_get_matches",
       description: "GET /quote/{id} returns the same quote created by POST /quote",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: POST /quote did not return a usable id",
     });
@@ -1049,6 +1080,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
       id: "sep38.quote_get_nonexistent",
       description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: SEP-10 JWT required to query GET /quote/{id}",
     });
@@ -1083,6 +1115,7 @@ export async function runSep38Checks(opts: Sep38Options): Promise<CheckResult[]>
           id: "sep38.quote_get_nonexistent",
           description: "GET /quote/{id} with a nonexistent id returns HTTP 404",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Anchor returned HTTP ${res.status} for nonexistent quote id ${bogusId} (expected 404); inconclusive`,
         });

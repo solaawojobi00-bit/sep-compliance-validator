@@ -149,6 +149,7 @@ export function validateCurrencies(
         id: "sep1.currencies.native_issuer",
         description: "Native asset should not declare issuer",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `${label}: native asset (XLM) has no issuer; declaring 'issuer' is redundant`,
       });
@@ -231,6 +232,7 @@ export function validateCurrencies(
           id: "sep1.currencies.name",
           description: "Currency name recommended length",
           status: "warn",
+          exercised: true,
           severity: "warning",
           message: `${label}: name exceeds recommended maximum of 20 characters (got ${typeof c.name === "string" ? `${c.name.length} chars` : typeof c.name})`,
         });

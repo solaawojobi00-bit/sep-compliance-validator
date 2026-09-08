@@ -233,6 +233,7 @@ export async function runCheckAction(
             id: "sep12.skipped",
             description: "Validate SEP-12 KYC endpoints",
             status: "warn",
+            exercised: false,
             severity: "error",
             message: "Skipped: SEP-12 requires SEP-10 for a JWT",
           });
@@ -270,6 +271,7 @@ export async function runCheckAction(
             id: "sep24.skipped",
             description: "Validate SEP-24 interactive deposit/withdraw endpoints",
             status: "warn",
+            exercised: false,
             severity: "error",
             message: "Skipped: SEP-24 requires SEP-10 for a JWT",
           });
@@ -350,10 +352,14 @@ export async function runCheckAction(
       console.log(rendered);
     }
 
-    const { fail, warn } = summarize(report);
+    // `--fail-on-warn` gates on advisory warnings only. A not-exercised result reports a
+    // limit of this run — a missing optional endpoint, a condition the anchor
+    // short-circuited past — so failing a build for one would fail it for something the
+    // operator cannot act on and the validator never actually checked.
+    const { fail, advisory } = summarize(report);
     if (fail > 0) {
       process.exitCode = 1;
-    } else if (options.failOnWarn && warn > 0) {
+    } else if (options.failOnWarn && advisory > 0) {
       process.exitCode = 1;
     } else {
       process.exitCode = 0;

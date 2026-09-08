@@ -42,6 +42,7 @@ export async function runSep24BrowserChecks(
           id: "sep24.interactive_browser_launch",
           description: "Launch headless browser and navigate to interactive URL",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message:
             'Browser launch skipped: optional dependency "playwright" is not installed. Run "npm install playwright && npx playwright install chromium" to enable.',
@@ -59,6 +60,7 @@ export async function runSep24BrowserChecks(
           id: "sep24.interactive_browser_launch",
           description: "Launch headless browser and navigate to interactive URL",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message:
             'Browser launch skipped: the installed "playwright" module exposes no chromium export. Reinstall with "npm install playwright && npx playwright install chromium".',
@@ -77,17 +79,30 @@ export async function runSep24BrowserChecks(
       msg.includes("playwright install") ||
       msg.includes("browserType.launch");
     const isMissing = isMissingPackage || isMissingBinary;
-    results.push({
-      id: "sep24.interactive_browser_launch",
-      description: "Launch headless browser and navigate to interactive URL",
-      status: isMissing ? "warn" : "fail",
-      severity: isMissing ? "warning" : "error",
-      message: isMissingPackage
-        ? 'Browser launch skipped: optional dependency "playwright" is not installed. Run "npm install playwright && npx playwright install chromium" to enable.'
-        : isMissingBinary
-          ? 'Browser launch skipped: Playwright Chromium binary not installed. Run "npx playwright install chromium" to enable.'
-          : `Failed to launch headless browser: ${msg}`,
-    });
+    const id = "sep24.interactive_browser_launch";
+    const description = "Launch headless browser and navigate to interactive URL";
+    if (isMissing) {
+      // Playwright is an optional dependency, so its absence is a limit of this run and
+      // says nothing about the anchor's interactive flow.
+      results.push({
+        id,
+        description,
+        status: "warn",
+        exercised: false,
+        severity: "warning",
+        message: isMissingPackage
+          ? 'Browser launch skipped: optional dependency "playwright" is not installed. Run "npm install playwright && npx playwright install chromium" to enable.'
+          : 'Browser launch skipped: Playwright Chromium binary not installed. Run "npx playwright install chromium" to enable.',
+      });
+    } else {
+      results.push({
+        id,
+        description,
+        status: "fail",
+        severity: "error",
+        message: `Failed to launch headless browser: ${msg}`,
+      });
+    }
     return { results };
   }
 
@@ -194,6 +209,7 @@ export async function runSep24BrowserChecks(
         id: "sep24.interactive_form_detected",
         description: "Detect interactive deposit/withdraw form inputs",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: "No interactive form or visible input elements detected on initial page",
       });
@@ -224,6 +240,7 @@ export async function runSep24BrowserChecks(
         description:
           "Verify interactive flow completion callback (postMessage or redirect)",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message:
           "No completion postMessage or redirect callback observed during automated session",

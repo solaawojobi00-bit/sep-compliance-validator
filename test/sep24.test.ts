@@ -207,12 +207,17 @@ describe("runSep24Checks", () => {
   }
 
   /** Runs the checks against the mocked anchor and indexes the list results by id. */
-  async function runListChecks(): Promise<Map<string, { status: string; severity: string; message: string }>> {
+  async function runListChecks(): Promise<
+    Map<string, { status: string; severity: string; message: string; exercised?: boolean }>
+  > {
     const results = await runSep24Checks({ domain, toml: validToml, network: "testnet", jwt });
     return new Map(
       results
         .filter((r) => r.id.startsWith("sep24.transactions_list"))
-        .map((r) => [r.id, { status: r.status, severity: r.severity, message: r.message }]),
+        .map((r) => [
+          r.id,
+          { status: r.status, severity: r.severity, message: r.message, exercised: r.exercised },
+        ]),
     );
   }
 
@@ -960,10 +965,14 @@ describe("runSep24Checks", () => {
       expect(checks.get("sep24.transactions_list_records")?.severity).toBe("warning");
       expect(checks.get("sep24.transactions_list_records")?.message).toContain("empty transactions array");
       expect(checks.get("sep24.transactions_list_asset_filter")?.status).toBe("warn");
+      // Nothing came back to filter, so neither of these says anything about the anchor.
+      expect(checks.get("sep24.transactions_list_asset_filter")?.exercised).toBe(false);
+      expect(checks.get("sep24.transactions_list_records")?.exercised).toBe(false);
 
       const created = checks.get("sep24.transactions_list_contains_created");
       expect(created?.status).toBe("warn");
       expect(created?.message).toContain("no transaction id was produced");
+      expect(created?.exercised).toBe(false);
     });
 
     it("fails the cross-check when a transaction created this run is absent from the list", async () => {
