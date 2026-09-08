@@ -6,6 +6,7 @@ import {
   Operation,
   TransactionBuilder,
   WebAuth,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { fetchWithTimeout } from "../core/http.js";
 import type { CheckResult } from "../core/report.js";
@@ -292,13 +293,11 @@ export async function runSep10NegativeChecks(
     }
     const tx = TransactionBuilder.fromXDR(baseChallengeXdr, networkPassphrase);
     const envelope = tx.toEnvelope();
-    envelope
-      .v1()
-      .tx()
-      .operations()[0]
-      .body()
-      .manageDataOp()
-      .dataValue(Buffer.from("tampered-nonce-tampered-nonce-tampered-nonce!"));
+    if ("v1" in envelope && envelope.v1) {
+      envelope.v1.tx.operations[0].body.manageDataOp.dataValue = new xdr.DataValue(
+        Buffer.from("tampered-nonce-tampered-nonce-tampered-nonce!"),
+      );
+    }
 
     const tamperedTx = TransactionBuilder.fromXDR(
       envelope.toXDR("base64"),

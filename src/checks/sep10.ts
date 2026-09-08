@@ -191,18 +191,19 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
   // plain transaction; a fee-bump would be malformed, so it is left undefined here and
   // the checks below report the absence rather than this throwing on a missing property.
   let rawChallengeTx: Transaction | undefined;
-  let op0: { value?: Buffer | string } | undefined;
+  let op0: { value?: Uint8Array | Buffer | string } | undefined;
   try {
     const parsed = TransactionBuilder.fromXDR(challengeXdr, networkPassphrase);
     if (parsed instanceof Transaction) {
       rawChallengeTx = parsed;
-      op0 = rawChallengeTx.operations[0] as { value?: Buffer | string } | undefined;
+      op0 = rawChallengeTx.operations[0] as { value?: Uint8Array | Buffer | string } | undefined;
     }
   } catch {}
 
-  const nonceBuf = Buffer.isBuffer(op0?.value)
-    ? op0!.value
-    : Buffer.from(String(op0?.value ?? ""), "utf-8");
+  const nonceBuf =
+    op0?.value instanceof Uint8Array || Buffer.isBuffer(op0?.value)
+      ? Buffer.from(op0.value)
+      : Buffer.from(String(op0?.value ?? ""), "utf-8");
   const nonceStr = nonceBuf.toString("utf-8");
   let decodedBytes: Buffer | undefined;
   try {
@@ -291,11 +292,12 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
           networkPassphrase,
         );
         const secondOp0 = secondTx.operations[0] as
-          | { value?: Buffer | string }
+          | { value?: Uint8Array | Buffer | string }
           | undefined;
-        const secondNonceBuf = Buffer.isBuffer(secondOp0?.value)
-          ? secondOp0!.value
-          : Buffer.from(String(secondOp0?.value ?? ""), "utf-8");
+        const secondNonceBuf =
+          secondOp0?.value instanceof Uint8Array || Buffer.isBuffer(secondOp0?.value)
+            ? Buffer.from(secondOp0.value)
+            : Buffer.from(String(secondOp0?.value ?? ""), "utf-8");
         const secondNonceStr = secondNonceBuf.toString("utf-8");
 
         if (secondNonceStr === nonceStr) {
@@ -489,7 +491,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       parsedChallengeTx?.operations as Array<{
         type: string;
         name?: string;
-        value?: Buffer | string;
+        value?: Uint8Array | Buffer | string;
         source?: string;
       }>
     )?.find((op) => op.type === "manageData" && op.name === "client_domain");
@@ -504,9 +506,10 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
         message: 'Challenge transaction missing "client_domain" Manage Data operation',
       });
     } else {
-      const valStr = Buffer.isBuffer(clientDomainOp.value)
-        ? clientDomainOp.value.toString("utf-8")
-        : String(clientDomainOp.value ?? "");
+      const valStr =
+        clientDomainOp.value instanceof Uint8Array || Buffer.isBuffer(clientDomainOp.value)
+          ? Buffer.from(clientDomainOp.value).toString("utf-8")
+          : String(clientDomainOp.value ?? "");
       const expectedKey =
         opts.clientSigningKey ?? opts.clientDomainKeypair?.publicKey();
       const valueMatches = valStr === opts.clientDomain;
@@ -544,7 +547,12 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       tx.sign(opts.clientDomainKeypair);
       const isSigned = tx.signatures.some((s) => {
         try {
-          return opts.clientDomainKeypair!.verify(tx.hash(), s.signature());
+          const sigBytes =
+            s.signature instanceof Uint8Array || Buffer.isBuffer(s.signature)
+              ? s.signature
+              : (s.signature as { value?: Uint8Array }).value ??
+                (typeof s.signature === "function" ? (s.signature as () => Buffer)() : Buffer.from([]));
+          return opts.clientDomainKeypair!.verify(tx.hash(), sigBytes);
         } catch {
           return false;
         }

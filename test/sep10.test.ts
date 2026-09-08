@@ -162,7 +162,12 @@ describe("runSep10Checks", () => {
 
         // Corrupt one byte of the resulting XDR's signature section
         const tx = TransactionBuilder.fromXDR(challengeXdr, Networks.TESTNET);
-        const sigBytes = tx.signatures[0].signature();
+        const sig = tx.signatures[0].signature;
+        const sigBytes =
+          sig instanceof Uint8Array || Buffer.isBuffer(sig)
+            ? sig
+            : (sig as { value?: Uint8Array }).value ??
+              (typeof sig === "function" ? (sig as () => Buffer)() : Buffer.from([]));
         sigBytes[0] ^= 0xff;
         const tamperedXdr = tx.toXDR();
 
