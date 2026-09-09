@@ -55,8 +55,19 @@ const V1_NOT_VERIFIED_CHECK_IDS = new Set([
   "sep38.skipped",
 ]);
 
-/** Messages that state the check did not reach a verdict. */
-const V1_NOT_VERIFIED_MESSAGE = /^(skipped|not exercised|inconclusive)\b|not verified by this run/i;
+/**
+ * Messages that state the check did not reach a verdict.
+ *
+ * Two regexes rather than one alternation, because the two halves are anchored
+ * differently on purpose: three of the four v1 phrasings were message *prefixes*, while
+ * "... NOT verified by this run" appeared mid-sentence after the anchor's own rejection
+ * reason. Expressing that as `/^(a|b|c)\b|d/` puts an anchored and an unanchored branch in
+ * one alternation, where the `^` silently applies to only the first — correct here, but
+ * indistinguishable from the bug where someone meant it to apply to all of them
+ * (CodeQL js/regex/missing-regexp-anchor).
+ */
+const V1_NOT_VERIFIED_PREFIX = /^(?:skipped|not exercised|inconclusive)\b/i;
+const V1_NOT_VERIFIED_SUBSTRING = /not verified by this run/i;
 
 /**
  * True when `result` — from a v1 report — is a warn that reports a limit of that run
@@ -74,5 +85,11 @@ export function isNotVerifiedV1(result) {
       return true;
     }
   }
-  return typeof result.message === "string" && V1_NOT_VERIFIED_MESSAGE.test(result.message);
+  if (typeof result.message !== "string") {
+    return false;
+  }
+  return (
+    V1_NOT_VERIFIED_PREFIX.test(result.message) ||
+    V1_NOT_VERIFIED_SUBSTRING.test(result.message)
+  );
 }

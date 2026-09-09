@@ -10,6 +10,17 @@ import { REPORT_SCHEMA_VERSION, type CheckResult } from "../src/core/report.js";
 const execAsync = promisify(exec);
 const cliPath = "node dist/cli.js";
 
+/**
+ * A Stellar Ed25519 *public* account ID used as fixture data — an address, not a
+ * credential (secret seeds start with S). Bound to a constant rather than inlined into
+ * each `SIGNING_KEY="..."` literal so the value stands alone: gitleaks' generic-api-key
+ * heuristic flags `key = <56 high-entropy chars>`, and `.gitleaks.toml` allowlists it by
+ * the secret's exact shape (`^G[A-Z2-7]{55}$`). Inlined inside a concatenated string the
+ * captured secret picks up the trailing quote and `+`, misses that anchored allowlist,
+ * and fails the scan.
+ */
+const fixtureSigningKey = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7";
+
 describe("runCheckAction in-process branch coverage", () => {
   const originalExitCode = process.exitCode;
   const originalFetch = global.fetch;
@@ -136,7 +147,7 @@ describe("runCheckAction in-process branch coverage", () => {
       return new Response(
         'VERSION="2.0.0"\n' +
           'NETWORK_PASSPHRASE="Test SDF Network ; September 2015"\n' +
-          'SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n' +
+          `SIGNING_KEY="${fixtureSigningKey}"\n` +
           'WEB_AUTH_ENDPOINT="https://example.com/auth"\n',
         {
           status: 200,
@@ -178,7 +189,7 @@ describe("runCheckAction in-process branch coverage", () => {
       }
       return new Response(
         'VERSION="2.0.0"\n' +
-          'SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n' +
+          `SIGNING_KEY="${fixtureSigningKey}"\n` +
           'WEB_AUTH_ENDPOINT="https://example.com/auth"\n',
         {
           status: 200,
