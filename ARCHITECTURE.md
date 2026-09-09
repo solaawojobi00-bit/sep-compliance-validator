@@ -117,7 +117,8 @@ sep-compliance-validator/
       aggregate-summary.mjs # Regenerates data/summary.json from the archive
       prune-retention.mjs   # 90-day detail retention
       storage-paths.mjs     # Archive layout and path-safety validation
-      inconclusive-ids.mjs  # INTERIM: classifies "unverified" warns (superseded by #124)
+      crawl-markers.mjs     # The crawler's own "leg did not run" marker ids
+      legacy-v1-inconclusive.mjs # FROZEN: decodes "unverified" warns in schemaVersion 1 archives
   test/                 # vitest suites covering checks, core, renderers, CLI, public API, registry, crawler
     fixtures/anchor/    # Hermetic self-signed-TLS stand-in for a SEP-1 conformant anchor,
                         # so the Action smoke test does not depend on a third party's uptime
@@ -159,6 +160,35 @@ of `CheckResult` objects (`{ id, description, status: "pass" | "fail" | "warn", 
 The CLI action aggregates all results into a unified `Report` object before dispatching
 to the chosen formatter.
 
+### Not exercised vs advisory
+
+A `warn` answers one of two different questions, and `exercised` says which:
+
+- `exercised: false` — the condition under test was never reached, so the result reports a
+  limit of this run and says nothing about the anchor. A missing optional endpoint, a
+  `--no-write` skip, an anchor that short-circuited before the condition was evaluated.
+- `exercised: true` — the check reached a verdict and found something advisory. A real, if
+  minor, finding about the anchor.
+
+The field is **required on `warn`** and absent on `pass`/`fail`, which are always
+exercised. That is a discriminated union in `src/core/report.ts`, so `tsc` — not a
+reviewer — guarantees every warn site declares which kind it is. Adding a check that emits
+a warn without deciding this will not compile.
+
+`severity` does not encode this: it distinguishes "counts toward the exit code" from "does
+not", and both kinds are `severity: "warning"`. Message prose does not encode it reliably
+either — four different phrasings were in use before the field existed, which is what
+motivated it (#124).
+
+Consequences worth knowing:
+
+- `--fail-on-warn` gates on advisory warnings only. Failing a build for a condition the
+  validator could not reach would fail it for something the operator cannot act on.
+- The table and HTML renderers show a not-exercised result as `SKIP`, not `WARN`.
+- `summarize()` reports `warn` (both kinds, unchanged), plus `advisory` and `notExercised`.
+- `rollUpStatus` in the crawler is deliberately unchanged: a run whose only warnings were
+  not exercised still rolls up to `warn`, never `pass`, because nothing was verified.
+
 ### Report schema versioning
 
 Every `Report` carries a `schemaVersion`, exported as `REPORT_SCHEMA_VERSION` from
@@ -180,9 +210,19 @@ previous version:
 - changing an existing field's type
 - adding a member to the `CheckStatus` or `Severity` unions, which a consumer handling
   them exhaustively would not recognise
+- adding a field whose *absence* is meaningful, because a consumer cannot otherwise tell
+  "absent because this report predates the field" from "absent because it does not apply"
 
-**Do not bump it** for a purely additive optional field. Well-behaved parsers ignore
-unknown keys, and bumping would force a pointless migration on every consumer.
+**Do not bump it** for a purely additive optional field whose absence carries no meaning.
+Well-behaved parsers ignore unknown keys, and bumping would force a pointless migration on
+every consumer.
+
+**v1 → v2** added `exercised` to every `warn` (#124). It is additive, but it earns a bump
+under the fourth rule above: on a v1 report the field is simply missing, and a reader that
+assumed "missing means advisory" would silently report zero not-exercised results for the
+dashboard's entire history. `schemaVersion` is how a reader picks the right
+interpretation, which is why `aggregate-summary.mjs` branches on it rather than reading
+the field unconditionally.
 
 ## Dashboard data pipeline
 
@@ -278,10 +318,13 @@ data is readable from the branch itself.
 - **On-demand re-check trigger:** `workflow_dispatch` with a per-domain input and rate
   limiting, so an operator can re-validate after shipping a fix. The workflow accepts a
   manual trigger today, but with no domain input and no rate limiting.
-- **`CheckResult` verdict field:** the crawler currently distinguishes "we could not verify
-  this" from "the anchor has an advisory finding" with a heuristic over message text
-  (`scripts/crawl/inconclusive-ids.mjs`), because `CheckResult` has no field for it. The
-  real fix is an explicit field — a `REPORT_SCHEMA_VERSION` bump touching every checker —
-  after which that file and its tests are deleted.
+- **Retiring the v1 inconclusive heuristic:** `CheckResult.exercised` (#124) replaced the
+  message-text heuristic for reports the CLI produces now. What remains is
+  `scripts/crawl/legacy-v1-inconclusive.mjs`, which decodes schemaVersion 1 reports still
+  inside the archive's retention window; `aggregate-summary.mjs` uses it only on the
+  `schemaVersion === 1` branch. It is frozen, not maintained — it decodes a closed set of
+  reports that will never gain new check ids, so the rot that motivated #124 (every new
+  inconclusive check having to be taught to a parallel list) no longer applies. Delete it
+  and that branch once no v1 report remains within `HISTORY_RETENTION_DAYS`.
 - **SEP-6 Programmatic Flows:** validation of non-interactive deposit and withdrawal flows,
   deferred due to real/test fund movement considerations.

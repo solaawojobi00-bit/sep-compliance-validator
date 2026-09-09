@@ -96,11 +96,15 @@ describe("SEP-10 negative-case challenge validation", () => {
     expect(expiredCheck?.severity).toBe("warning");
     expect(expiredCheck?.message).toContain("Transaction source account is not equal");
     expect(expiredCheck?.message).toContain("challenge expiry was NOT verified");
+    // #77/#124: the anchor *did* reject, so this must never read as a finding against it.
+    // The message said so in prose; now the schema does.
+    expect(expiredCheck?.exercised).toBe(false);
 
     const wrongNetCheck = results.find((r) => r.id === "sep10.negative.wrong_network");
     expect(wrongNetCheck?.status).toBe("warn");
     expect(wrongNetCheck?.severity).toBe("warning");
     expect(wrongNetCheck?.message).toContain("network passphrase validation was NOT verified");
+    expect(wrongNetCheck?.exercised).toBe(false);
 
     // The two conclusive cases are unaffected by reason analysis.
     expect(results.find((r) => r.id === "sep10.negative.tampered_payload")?.status).toBe("pass");

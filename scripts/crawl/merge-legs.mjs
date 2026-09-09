@@ -7,7 +7,7 @@
  * for a leg that did not run travels as ordinary `CheckResult` markers inside `results`,
  * which is also what keeps summary.json regenerable from the archive alone (§4.2).
  */
-import { CRAWL_UNAVAILABLE_SUFFIX, isCrawlUnavailable } from "./inconclusive-ids.mjs";
+import { CRAWL_UNAVAILABLE_SUFFIX, isCrawlUnavailable } from "./crawl-markers.mjs";
 
 /** The SEP an id belongs to: the segment before its first dot. */
 function sepOf(id) {
@@ -41,12 +41,17 @@ export function ownsResult(leg, id) {
  * not observe. Not omitted either - a silently missing SEP would let the dashboard show
  * "10/10 passed" while concealing that a third of the checks never ran, which is exactly
  * the silently-wrong dashboard data §4.1 warns about.
+ *
+ * `exercised: false` for the same reason the marker exists at all: nothing about the
+ * anchor was measured. These markers are minted here rather than by a checker, so they
+ * are the one place the field is set outside `src/`.
  */
 export function unavailableMarkers(leg, reason) {
   return leg.owns.map((sep) => ({
     id: `${sep}${CRAWL_UNAVAILABLE_SUFFIX}`,
     description: `${sep.toUpperCase()} checks did not run in this crawl`,
     status: "warn",
+    exercised: false,
     severity: "warning",
     message: `Not run: the ${leg.id} leg did not produce a usable report (${reason}). This is a crawler limitation, not a finding about this anchor.`,
   }));

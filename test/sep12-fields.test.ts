@@ -164,6 +164,9 @@ describe("SEP-12 fields / provided_fields schema validation", () => {
     expect(results[0].id).toBe("sep12.fields.unknown_name");
     expect(results[0].status).toBe("warn");
     expect(results[0].message).toContain("my_custom_field");
+    // #124: the one advisory warning on a conformant anchor. We looked at the field and
+    // formed a view about it, so it must stay advisory and not be filed as a skip.
+    expect(results[0].exercised).toBe(true);
   });
 
   it("does not warn for every recognized SEP-9 standard field name", () => {

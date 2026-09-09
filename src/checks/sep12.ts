@@ -39,10 +39,14 @@ const VERIFICATION_CHECK_DESCRIPTIONS = {
 
 type VerificationCheckId = keyof typeof VERIFICATION_CHECK_DESCRIPTIONS;
 
-/** Pushes the same status/message under several verification check ids (shared skip). */
+/**
+ * Pushes the same message under several verification check ids.
+ *
+ * Every caller is a shared skip — the confirmation-code flow could not be reached — so
+ * the verdict is fixed as a not-exercised warn rather than passed in.
+ */
 function pushVerificationResults(
   ids: readonly VerificationCheckId[],
-  status: CheckResult["status"],
   severity: CheckResult["severity"],
   message: string,
   results: CheckResult[],
@@ -51,7 +55,8 @@ function pushVerificationResults(
     results.push({
       id,
       description: VERIFICATION_CHECK_DESCRIPTIONS[id],
-      status,
+      status: "warn",
+      exercised: false,
       severity,
       message,
     });
@@ -222,6 +227,7 @@ async function checkCustomerVerification(
         id: "sep12.verification_wrong_code",
         description: VERIFICATION_CHECK_DESCRIPTIONS["sep12.verification_wrong_code"],
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Inconclusive: anchor returned HTTP ${res.status} for PUT ${url}`,
       });
@@ -280,6 +286,7 @@ async function checkCustomerVerification(
       id: "sep12.verification_response_schema",
       description: VERIFICATION_CHECK_DESCRIPTIONS["sep12.verification_response_schema"],
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: suppliedCodeRejection
         ? `Not exercised: the anchor rejected the supplied confirmation code for ${field} (${suppliedCodeRejection}), so there is no success response to validate. The code may be stale or already used, or this run's preceding wrong-code probe may have triggered a failed-attempt lockout — this is not in itself a defect in the anchor's success response`
@@ -356,6 +363,7 @@ async function checkCustomerVerification(
         id: "sep12.verification_unauthenticated",
         description: VERIFICATION_CHECK_DESCRIPTIONS["sep12.verification_unauthenticated"],
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Anchor returned HTTP ${res.status} for unauthenticated PUT /customer/verification (expected 401 or 403); inconclusive`,
       });
@@ -387,6 +395,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       id: "sep12.skipped",
       description: "Run SEP-12 KYC endpoint checks",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: KYC_SERVER or TRANSFER_SERVER missing from stellar.toml",
     });
@@ -398,6 +407,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       id: "sep12.skipped",
       description: "Run SEP-12 KYC endpoint checks",
       status: "warn",
+      exercised: false,
       severity: "error",
       message: "Skipped: valid SEP-10 JWT is required to run SEP-12 checks",
     });
@@ -415,6 +425,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       id: "sep12.put_customer",
       description: "PUT /customer accepts minimal valid KYC field set",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: --no-write mode enabled; mutating PUT /customer request omitted",
     });
@@ -422,6 +433,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       id: "sep12.get_customer",
       description: "GET /customer returns existing customer record",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: --no-write mode enabled; no customer record created to fetch by id",
     });
@@ -429,12 +441,12 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
       id: "sep12.put_malformed_field",
       description: "PUT /customer rejects malformed fields with error response",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: --no-write mode enabled; mutating PUT /customer request omitted",
     });
     pushVerificationResults(
       ALL_VERIFICATION_CHECK_IDS,
-      "warn",
       "warning",
       "Skipped: --no-write mode enabled; mutating PUT /customer/verification request omitted",
       results,
@@ -682,7 +694,6 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
   if (!customerId) {
     pushVerificationResults(
       ALL_VERIFICATION_CHECK_IDS,
-      "warn",
       "warning",
       "Not exercised: PUT /customer did not return a customer id, so the verification flow could not be reached",
       results,
@@ -690,7 +701,6 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
   } else if (verificationRequiredFields.length === 0) {
     pushVerificationResults(
       ALL_VERIFICATION_CHECK_IDS,
-      "warn",
       "warning",
       "Not exercised: the anchor did not flag any provided_field as VERIFICATION_REQUIRED for this synthetic customer, so the confirmation-code flow was never triggered and remains unverified",
       results,
@@ -704,7 +714,6 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
     // than the operator named.
     pushVerificationResults(
       ALL_VERIFICATION_CHECK_IDS,
-      "warn",
       "warning",
       `Not exercised: --sep12-verification-field "${opts.verificationField}" is not among the field(s) this anchor flagged as VERIFICATION_REQUIRED (${verificationRequiredFields.join(", ")})`,
       results,
@@ -752,6 +761,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
             id: "sep12.delete_customer",
             description: "DELETE /customer/{account} cleans up test customer data",
             status: "warn",
+            exercised: true,
             severity: "warning",
             message: `Teardown DELETE ${deleteUrl} failed with HTTP ${deleteRes.status}; created customer id(s) [${[...createdCustomerIds].join(", ")}] may have leaked`,
           });
@@ -761,6 +771,7 @@ export async function runSep12Checks(opts: Sep12Options): Promise<CheckResult[]>
           id: "sep12.delete_customer",
           description: "DELETE /customer/{account} cleans up test customer data",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message: `Teardown DELETE ${deleteUrl} error (${(err as Error).message}); created customer id(s) [${[...createdCustomerIds].join(", ")}] may have leaked`,
         });

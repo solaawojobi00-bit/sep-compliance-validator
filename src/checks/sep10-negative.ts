@@ -114,6 +114,7 @@ async function submitAndAssertRejected(
           id: checkId,
           description,
           status: "warn",
+          exercised: false,
           severity: "warning",
           message:
             `Anchor rejected ${caseName} with HTTP ${res.status} but gave no error message, ` +
@@ -136,6 +137,7 @@ async function submitAndAssertRejected(
         id: checkId,
         description,
         status: "warn",
+        exercised: false,
         severity: "warning",
         message:
           `Anchor rejected ${caseName} with HTTP ${res.status}, but its stated reason ("${reason}") ` +
