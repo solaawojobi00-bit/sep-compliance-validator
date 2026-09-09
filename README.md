@@ -90,15 +90,21 @@ npx sep-compliance-validator check testanchor.stellar.org --network testnet
 ```
 
 Runs against [Stellar's official testnet reference anchor](https://testanchor.stellar.org)
-and prints a pass/fail table for every check, e.g.:
+and prints a pass/fail table for every check, ending in a summary line. Adding `--no-write`
+to keep that run read-only, the report currently ends:
 
 ```
 SEP Compliance Report for testanchor.stellar.org (testnet)
 ...
-12/12 passed, 0 failed, 0 warnings
+60/75 passed, 0 failed, 15 warnings
 ```
 
-The process exits non-zero if any check fails, so it can be used as a CI gate.
+The exact counts move as the anchor changes and as checks are added — treat them as a
+sample, not a target. Without `--no-write` the run also exercises SEP-12's write path,
+which creates a synthetic test customer and deletes it again.
+
+The process exits non-zero if any check fails, so it can be used as a CI gate. Warnings
+alone do not fail the run unless `--fail-on-warn` is passed.
 
 ## GitHub Action for Anchor CI Pipelines
 
@@ -182,12 +188,21 @@ Participation in this project is governed by the [Code of Conduct](./CODE_OF_CON
 ```bash
 npm run build            # compile TypeScript to dist/ (run first — some tests spawn dist/cli.js)
 npm test                 # run the test suite (vitest)
-npm run lint             # eslint, bug-finding rules only
+npm run test:coverage    # the same suite under the coverage thresholds CI gates on
+npm run lint             # eslint, bug-finding rules only (an `any` fails the build)
 npm run typecheck        # type-check the test suite (tsconfig.json excludes test/)
 npm run validate:registry # check registry/anchors.json against its schema
 ```
 
-These five are the gates CI enforces on every pull request.
+Everything above except `npm run validate:registry` runs on every pull request. The
+registry check is path-filtered to `registry/` and its tooling, so a normal change never
+waits on it — but run it locally before you edit the registry.
+
+CI enforces more than these scripts: `actionlint` over the workflow files, a blocking
+production dependency audit (`npm audit --omit=dev --audit-level=high`), an `npm pack`
+smoke test that installs the tarball into a clean project, two composite-Action smoke jobs
+covering the passing and the failing path, plus CodeQL, Gitleaks, and dependency review.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for what to run before pushing.
 
 ### Getting your anchor onto the public dashboard
 

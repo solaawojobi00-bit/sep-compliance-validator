@@ -4,8 +4,8 @@
 
 - **Language/runtime:** TypeScript on Node.js 22+ (`engines: ">=22"`). Node 20 was dropped
   when it reached end-of-life in April 2026; CI tests against 22.x and 24.x.
-- **Stellar SDK:** [`@stellar/stellar-sdk`](https://github.com/stellar/js-stellar-sdk) —
-  the official JS SDK ships purpose-built SEP-10 helpers in its `WebAuth` namespace. The
+- **Stellar SDK:** [`@stellar/stellar-sdk`](https://github.com/stellar/js-stellar-sdk) v17
+  — the official JS SDK ships purpose-built SEP-10 helpers in its `WebAuth` namespace. The
   validator uses two of them: `WebAuth.readChallengeTx`, which parses the anchor's
   challenge and verifies it against the `SIGNING_KEY` declared in `stellar.toml`
   (`sep10.ts`), and `WebAuth.buildChallengeTx`, which forges the wrong-network challenge
@@ -14,6 +14,13 @@
   spec fixes. The optional `client_domain` co-signature is checked separately with
   `Keypair.verify` against the transaction hash, since it is verified against a key
   discovered from the client domain's own TOML rather than the anchor's.
+
+  The v13 -> v17 upgrade (#145) was driven by a vulnerable transitive `toml` dependency,
+  and it is a breaking change worth knowing about before editing the SEP-10 checkers: in
+  v17, XDR unions expose class properties rather than accessor functions, byte fields come
+  back as `Uint8Array` rather than `Buffer`, and signatures are `Signature` objects. That
+  is most of what `sep10-negative.ts` has to work around when it assembles a deliberately
+  malformed challenge by hand.
 - **JWKS & Cryptography:** `jose` for JSON Web Key Set (JWKS) discovery and cryptographic
   signature verification of anchor-issued SEP-10 JWT tokens.
 - **Browser Automation:** `playwright` for on-demand headless browser execution to
@@ -29,8 +36,10 @@
   - `cli-table3` for terminal ASCII table formatting (`output/table.ts`).
   - Native JSON serializer for structured machine-readable reports (`output/json.ts`).
   - Standalone HTML document generator with embedded responsive CSS styles (`output/html.ts`).
-- **Testing:** `vitest` with v8 coverage tracking across unit, integration, and CLI entry points.
-- **Package distribution & CI:** automated semantic versioning (`semantic-release`), manual npm publishing with OIDC provenance attestations (`--provenance`), and packaged as a reusable composite GitHub Action (`action.yml`). Supply chain and security gating via Actionlint, CodeQL, Gitleaks, and packaging smoke testing.
+- **Testing:** `vitest` with v8 coverage across unit, integration, and CLI entry points. The
+  thresholds in `vitest.config.ts` are a blocking CI gate, not just a report: 85% lines and
+  statements, 82% branches, and 100% functions, with `src/checks/**` held to 80% branches.
+- **Package distribution & CI:** automated semantic versioning (`semantic-release`), manual npm publishing with OIDC provenance attestations (`--provenance`), and packaged as a reusable composite GitHub Action (`action.yml`). Supply chain and security gating via Actionlint, CodeQL, Gitleaks, Dependabot, GitHub dependency review, a blocking production dependency audit (`npm audit --omit=dev --audit-level=high`, with the full tree audited advisory-only so dev-side advisories stay visible without turning CI red), and packaging smoke testing.
 
 ## Why this stack
 
@@ -110,16 +119,23 @@ sep-compliance-validator/
       storage-paths.mjs     # Archive layout and path-safety validation
       inconclusive-ids.mjs  # INTERIM: classifies "unverified" warns (superseded by #124)
   test/                 # vitest suites covering checks, core, renderers, CLI, public API, registry, crawler
-  .github/workflows/
-    ci.yml              # Build, test, lint, typecheck, coverage, actionlint, pack & action smoke tests
-    codeql.yml          # CodeQL security analysis
-    dashboard-crawl.yml # Daily anchor crawl (0 0 * * *)
-    dependency-review.yml # Dependency review on pull requests
-    live-anchor.yml     # Scheduled run against the live testnet reference anchor
-    publish.yml         # npm publish on manual dispatch with provenance attestation
-    registry-validate.yml # Registry schema + domain reachability gates on PRs
-    release.yml         # Semantic-release automated versioning and tagging on main
-    secret-scan.yml     # Gitleaks credential scanning on push and PR
+    fixtures/anchor/    # Hermetic self-signed-TLS stand-in for a SEP-1 conformant anchor,
+                        # so the Action smoke test does not depend on a third party's uptime
+  .github/
+    dependabot.yml      # Weekly npm (production/development split) and github-actions updates
+    PULL_REQUEST_TEMPLATE.md # Mirrors CONTRIBUTING's pull request checklist
+    ISSUE_TEMPLATE/     # Bug report, feature request, and new-SEP-checker forms
+    workflows/
+      ci.yml            # Build, test, lint, typecheck, coverage gate, actionlint,
+                        # dependency audits, pack & action smoke tests
+      codeql.yml        # CodeQL security analysis
+      dashboard-crawl.yml # Daily anchor crawl (0 0 * * *)
+      dependency-review.yml # Dependency review on pull requests
+      live-anchor.yml   # Scheduled run against the live testnet reference anchor
+      publish.yml       # npm publish on manual dispatch with provenance attestation
+      registry-validate.yml # Registry schema + domain reachability gates on PRs
+      release.yml       # Semantic-release automated versioning and tagging on main
+      secret-scan.yml   # Gitleaks credential scanning on push and PR
   docs/
     dashboard-design.md # Architecture and data model for hosted dashboard web app
   .gitleaks.toml
