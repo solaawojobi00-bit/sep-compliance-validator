@@ -312,16 +312,44 @@ const LIST_CHECK_DESCRIPTIONS = {
 
 type ListCheckId = keyof typeof LIST_CHECK_DESCRIPTIONS;
 
-/** Pushes the same status/message under several list check ids (shared failure or skip). */
-function pushListResults(
+/** Pushes the same failure under several list check ids (shared failure). */
+function pushListFailures(
   ids: readonly ListCheckId[],
-  status: CheckResult["status"],
-  severity: CheckResult["severity"],
   message: string,
   results: CheckResult[],
 ): void {
   for (const id of ids) {
-    results.push({ id, description: LIST_CHECK_DESCRIPTIONS[id], status, severity, message });
+    results.push({
+      id,
+      description: LIST_CHECK_DESCRIPTIONS[id],
+      status: "fail",
+      severity: "error",
+      message,
+    });
+  }
+}
+
+/**
+ * Pushes the same not-exercised warn under several list check ids (shared skip).
+ *
+ * Split from {@link pushListFailures} rather than taking a `status` parameter so that
+ * `exercised` cannot be defaulted: a shared skip and a shared failure are different
+ * verdicts, and the call site has to say which it means.
+ */
+function pushListNotExercised(
+  ids: readonly ListCheckId[],
+  message: string,
+  results: CheckResult[],
+): void {
+  for (const id of ids) {
+    results.push({
+      id,
+      description: LIST_CHECK_DESCRIPTIONS[id],
+      status: "warn",
+      exercised: false,
+      severity: "warning",
+      message,
+    });
   }
 }
 
@@ -433,10 +461,8 @@ async function checkTransactionList(
     const res = await fetchWithTimeout(listUrl, { headers: { ...authHeader } }, timeoutMs);
 
     if (!res.ok) {
-      pushListResults(
+      pushListFailures(
         ["sep24.transactions_list", ...derivedIds],
-        "fail",
-        "error",
         `GET ${listUrl} returned HTTP ${res.status}`,
         results,
       );
@@ -445,10 +471,8 @@ async function checkTransactionList(
       const transactions = body.transactions;
 
       if (!Array.isArray(transactions)) {
-        pushListResults(
+        pushListFailures(
           ["sep24.transactions_list", ...derivedIds],
-          "fail",
-          "error",
           `Response must be an object with a "transactions" array, got: ${JSON.stringify(transactions)}`,
           results,
         );
@@ -466,10 +490,8 @@ async function checkTransactionList(
           // An anchor with no history for this account is legitimate, so the schema and
           // filter checks have nothing to judge. The cross-check below still fails if a
           // transaction was created this run and is missing from the list.
-          pushListResults(
+          pushListNotExercised(
             ["sep24.transactions_list_records", "sep24.transactions_list_asset_filter"],
-            "warn",
-            "warning",
             "Inconclusive: anchor returned an empty transactions array, so there are no records to validate",
             results,
           );
@@ -520,6 +542,7 @@ async function checkTransactionList(
               id: "sep24.transactions_list_asset_filter",
               description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_asset_filter"],
               status: "warn",
+              exercised: false,
               severity: "warning",
               message: `Inconclusive: none of the ${records.length} record(s) carry asset_code, amount_in_asset, or amount_out_asset, so the asset_code filter cannot be verified`,
             });
@@ -539,6 +562,7 @@ async function checkTransactionList(
             id: "sep24.transactions_list_contains_created",
             description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_contains_created"],
             status: "warn",
+            exercised: false,
             severity: "warning",
             message:
               "Skipped: no transaction id was produced by POST /transactions/deposit/interactive this run, so the list could not be cross-checked against the lookup",
@@ -558,10 +582,8 @@ async function checkTransactionList(
       }
     }
   } catch (err) {
-    pushListResults(
+    pushListFailures(
       ["sep24.transactions_list", ...derivedIds],
-      "fail",
-      "error",
       (err as Error).message,
       results,
     );
@@ -591,6 +613,7 @@ async function checkTransactionList(
       id: excludesId,
       description: excludesDescription,
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: `Not exercised: /info advertised no enabled asset other than ${assetCode}, so there is no second asset to filter by (a single-asset anchor is legitimate)`,
     });
@@ -599,6 +622,7 @@ async function checkTransactionList(
       id: excludesId,
       description: excludesDescription,
       status: "warn",
+      exercised: false,
       severity: "warning",
       message:
         "Skipped: no transaction id was produced by POST /transactions/deposit/interactive this run, so there is no transaction whose exclusion could be asserted",
@@ -733,6 +757,7 @@ async function checkTransactionList(
         id: "sep24.transactions_list_requires_asset_code",
         description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_requires_asset_code"],
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Anchor returned HTTP ${res.status} for GET /transactions with no asset_code (expected a 4xx); inconclusive`,
       });
@@ -774,6 +799,7 @@ async function checkTransactionList(
         id: "sep24.transactions_list_unauthenticated",
         description: LIST_CHECK_DESCRIPTIONS["sep24.transactions_list_unauthenticated"],
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Anchor returned HTTP ${res.status} for unauthenticated GET /transactions (expected 401 or 403); inconclusive`,
       });
@@ -802,6 +828,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
       id: "sep24.skipped",
       description: "Run SEP-24 interactive deposit/withdraw checks",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: "Skipped: TRANSFER_SERVER_SEP0024 missing from stellar.toml",
     });
@@ -813,6 +840,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
       id: "sep24.skipped",
       description: "Run SEP-24 interactive deposit/withdraw checks",
       status: "warn",
+      exercised: false,
       severity: "error",
       message: "Skipped: valid SEP-10 JWT is required to run SEP-24 checks",
     });
@@ -981,6 +1009,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
       description:
         "POST /transactions/withdraw/interactive returns interactive response with url and id",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message,
     });
@@ -988,6 +1017,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
       id: "sep24.withdraw_interactive_url_reachable",
       description: "Interactive URL is a well-formed, reachable HTTPS URL",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message,
     });
@@ -995,6 +1025,7 @@ export async function runSep24Checks(opts: Sep24Options): Promise<CheckResult[]>
       id: "sep24.withdraw_transaction_status",
       description: "GET /transaction returns record with valid SEP-24 status",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message,
     });

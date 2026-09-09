@@ -64,7 +64,7 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 - `-f, --format <table|json|html>`: Output format (default: `table`).
 - `-o, --output <file>`: Write rendered report to a file instead of stdout.
 - `--only <seps>`: Comma-separated list of SEPs to validate (e.g. `sep1,sep10`).
-- `--fail-on-warn`: Exit with status 1 if any check generates a warning.
+- `--fail-on-warn`: Exit with status 1 if any check generates an *advisory* warning. Warnings that report a check the validator could not exercise (rendered `SKIP`) do not fail the build, because they say nothing about your anchor.
 - `-v, --verbose`: Print detailed HTTP request and response diagnostics to stderr.
 - `--client-domain <domain>`: Client domain to exercise SEP-10 `client_domain` verification.
 - `-t, --timeout <ms>`: Request timeout in milliseconds (default: `10000`).
@@ -79,8 +79,8 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 
 ### Exit Codes
 
-- `0`: All checks passed (or warnings produced when `--fail-on-warn` is omitted).
-- `1`: One or more checks failed (or produced warnings when `--fail-on-warn` is active).
+- `0`: All checks passed (or warnings produced when `--fail-on-warn` is omitted, or only not-exercised warnings when it is active).
+- `1`: One or more checks failed (or produced advisory warnings when `--fail-on-warn` is active).
 - `2`: CLI usage / argument validation error.
 
 ### Example
@@ -100,6 +100,22 @@ SEP Compliance Report for testanchor.stellar.org (testnet)
 
 The process exits non-zero if any check fails, so it can be used as a CI gate.
 
+#### Reading `WARN` vs `SKIP`
+
+A check that could not be exercised is reported as `SKIP`, not `WARN`, and counted
+separately:
+
+```
+69/77 passed, 0 failed, 1 warnings, 7 not exercised
+```
+
+`SKIP` means the condition under test was never reached — no optional endpoint was
+declared, `--no-write` suppressed a mutating request, or the anchor rejected a probe before
+the condition mattered. It reports a limit of the run, not a problem with your anchor, and
+there is nothing to fix. `WARN` is a real, if minor, finding. The example above is a fully
+conformant anchor: seven of its eight warnings are the validator describing its own
+coverage.
+
 ## GitHub Action for Anchor CI Pipelines
 
 You can use this validator directly as a GitHub Action in your anchor repository to automatically gate pull requests and deployments on SEP conformance.
@@ -114,7 +130,7 @@ You can use this validator directly as a GitHub Action in your anchor repository
 | `timeout` | Request timeout in milliseconds | `10000` |
 | `client-domain` | Client domain for SEP-10 verification | — |
 | `confirm-mainnet` | Set to `true` to confirm testing against production anchor on mainnet | `false` |
-| `fail-on-warn` | Set to `true` to treat warning checks as failures | `false` |
+| `fail-on-warn` | Set to `true` to treat advisory warning checks as failures | `false` |
 | `only` | Comma-separated list of SEPs to validate (e.g. `sep1,sep10`) | — |
 | `interactive-browser`| Run headless browser checks against SEP-24 interactive URL | `false` |
 | `no-write` | Set to `true` to disable state-mutating requests (e.g. SEP-12 `PUT /customer`) | `false` |
@@ -126,7 +142,9 @@ You can use this validator directly as a GitHub Action in your anchor repository
 |---|---|
 | `pass` | Number of passed checks |
 | `fail` | Number of failed checks |
-| `warn` | Number of warning checks |
+| `warn` | Number of warning checks, of both kinds |
+| `advisory` | Number of warnings that found something advisory about the anchor |
+| `not-exercised` | Number of warnings for checks that never reached a verdict |
 | `total` | Total number of checks executed |
 | `report-path` | File path to the generated JSON compliance report |
 | `exit-code` | Validator CLI exit code: `0` all checks passed, `1` one or more checks failed, `2` the invocation was rejected. Lets a pipeline tell "this anchor is non-conformant" apart from "the validator was called wrong" |

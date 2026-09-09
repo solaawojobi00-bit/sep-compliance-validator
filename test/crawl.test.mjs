@@ -22,7 +22,8 @@ import {
   rollUpStatus,
 } from "../scripts/crawl/aggregate-summary.mjs";
 import { classifyDetailFiles, DETAIL_RETENTION_DAYS } from "../scripts/crawl/prune-retention.mjs";
-import { isCrawlUnavailable, isNotVerified } from "../scripts/crawl/inconclusive-ids.mjs";
+import { isCrawlUnavailable } from "../scripts/crawl/crawl-markers.mjs";
+import { isNotVerifiedV1 } from "../scripts/crawl/legacy-v1-inconclusive.mjs";
 import { fileStamp, latestPath, parseFileStamp, reportPath } from "../scripts/crawl/storage-paths.mjs";
 import { looksTransient } from "../scripts/crawl/run-anchor.mjs";
 
@@ -38,6 +39,12 @@ const check = (id, status = "pass", message = "ok") => ({
   status,
   severity: status === "fail" ? "error" : status === "warn" ? "warning" : "error",
   message,
+});
+
+/** A schemaVersion 2 warn, which states its verdict explicitly rather than in prose. */
+const warnV2 = (id, exercised, message = "ok") => ({
+  ...check(id, "warn", message),
+  exercised,
 });
 
 describe("build-cli-args: the two flag conditions", () => {
@@ -377,13 +384,13 @@ describe("aggregate-summary: warn and fail stay distinct", () => {
     expect(rollUpStatus([])).toBe("warn");
   });
 
-  it("counts the two SEP-10 negative cases as not verified, not as problems", () => {
+  it("counts the two SEP-10 negative cases as not verified, not as problems (v1 archive)", () => {
     const results = [
       check("sep10.negative.expired", "warn", 'Anchor rejected expired challenge with HTTP 400, but ... expiry was NOT verified by this run.'),
       check("sep10.negative.wrong_network", "warn", "Anchor rejected wrong-network challenge ... NOT verified by this run."),
       check("sep12.fields.unknown_name", "warn", '"photo_proof_of_income" is not a standard SEP-9 field'),
     ];
-    const counts = countResults(results);
+    const counts = countResults(results, 1);
     expect(counts.warn).toBe(3);
     expect(counts.notVerified).toBe(2);
     expect(counts.fail).toBe(0);
@@ -391,26 +398,52 @@ describe("aggregate-summary: warn and fail stay distinct", () => {
     expect(counts.warn - counts.notVerified).toBe(1);
   });
 
-  it("recognises every not-exercised phrasing the checkers use", () => {
+  it("reads the exercised field on a v2 report instead of the message text", () => {
+    // Deliberately adversarial wording: the advisory result opens with "Skipped:" and the
+    // not-exercised one reads like a finding. A v2 report must be classified by its field,
+    // so prose can never sway the count again.
+    const results = [
+      warnV2("sep12.fields.unknown_name", true, "Skipped: this wording would fool the v1 heuristic"),
+      warnV2("sep10.jwt_signature", false, "no JWKS endpoint declared"),
+    ];
+    const counts = countResults(results, 2);
+    expect(counts.warn).toBe(2);
+    expect(counts.notVerified).toBe(1);
+    expect(counts.warn - counts.notVerified).toBe(1);
+  });
+
+  it("does not fall back to the v1 heuristic for a v2 report", () => {
+    // A v2 warn that omitted the field would be a producer bug. It must not be silently
+    // reclassified by prose; it counts as advisory, the conservative reading.
+    const counts = countResults([check("x.y", "warn", "Skipped: no field set")], 2);
+    expect(counts.notVerified).toBe(0);
+  });
+
+  it("recognises every not-exercised phrasing the v1 checkers used", () => {
     for (const message of [
       "Skipped: --no-write mode enabled; mutating PUT /customer request omitted",
       "Not exercised: the anchor did not flag any provided_field as VERIFICATION_REQUIRED",
       "Inconclusive: none of the 2 record(s) carry asset_code",
       "... so challenge expiry was NOT verified by this run",
     ]) {
-      expect(isNotVerified(check("x.y", "warn", message)), message).toBe(true);
+      expect(isNotVerifiedV1(check("x.y", "warn", message)), message).toBe(true);
     }
   });
 
   it("never treats a pass or a fail as not verified", () => {
-    expect(isNotVerified(check("sep10.negative.expired", "fail", "AUTHENTICATION BYPASS"))).toBe(false);
-    expect(isNotVerified(check("sep10.jwt_signature", "pass", "verified"))).toBe(false);
+    expect(isNotVerifiedV1(check("sep10.negative.expired", "fail", "AUTHENTICATION BYPASS"))).toBe(false);
+    expect(isNotVerifiedV1(check("sep10.jwt_signature", "pass", "verified"))).toBe(false);
+    expect(countResults([check("a", "fail"), check("b", "pass")], 2).notVerified).toBe(0);
   });
 
-  it("treats crawl_unavailable markers as not verified", () => {
+  it("treats crawl_unavailable markers as not verified under both schema versions", () => {
     const marker = unavailableMarkers(kyc, "timeout")[0];
     expect(isCrawlUnavailable(marker)).toBe(true);
-    expect(isNotVerified(marker)).toBe(true);
+    expect(isNotVerifiedV1(marker)).toBe(true);
+    // The marker now carries the field, so v2 classification reaches the same verdict
+    // without consulting its id or message.
+    expect(marker.exercised).toBe(false);
+    expect(countResults([marker], 2).notVerified).toBe(1);
   });
 });
 

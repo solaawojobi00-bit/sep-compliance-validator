@@ -25,12 +25,27 @@ title = "sep-compliance-validator secret scanning"
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "Stellar Ed25519 *public* account IDs used as fixture data (G + 55 base32 chars). These are addresses, not credentials; secret seeds start with S and are deliberately not allowlisted."
+# One singular `[allowlist]` table rather than several `[[allowlists]]` entries, because
+# the plural top-level array is only honoured by newer gitleaks than CI runs.
+# gitleaks-action@v3 pins gitleaks 8.24.3, which parses `[[allowlists]]` at the top level
+# without applying it — so every allowlist below was silently inert on the scanner that
+# actually gates the repository. It was not noticed because the workflow scans the pushed
+# commit *range*, not the tree: the fixture keys already on main are never re-scanned, so
+# the failure only surfaces on a commit that adds a new line containing one.
+#
+# Verified against both 8.24.3 (CI) and 8.30.1 (current release): fixture keys clean, and
+# a Stellar secret seed still reported. If the pinned scanner is ever raised past 8.25,
+# `[[allowlists]]` becomes available and these can be split back into described entries.
+#
+# The two regexes are:
+#   1. Stellar Ed25519 *public* account IDs used as fixture data (G + 55 base32 chars).
+#      These are addresses, not credentials; secret seeds start with S and are
+#      deliberately not allowlisted.
+#   2. Deliberately malformed placeholder keys asserting the SEP-1/SEP-10 rejection paths.
+[allowlist]
+description = "Stellar public account IDs and malformed placeholder keys used as fixture data. Addresses, not credentials: secret seeds (S...) are deliberately not allowlisted."
 regexTarget = "secret"
-regexes = ['''^G[A-Z2-7]{55}$''']
-
-[[allowlists]]
-description = "Deliberately malformed placeholder keys asserting the SEP-1/SEP-10 rejection paths."
-regexTarget = "secret"
-regexes = ['''^GNOTVALID[A-Z0-9]*$''']
+regexes = [
+  '''^G[A-Z2-7]{55}$''',
+  '''^GNOTVALID[A-Z0-9]*$''',
+]

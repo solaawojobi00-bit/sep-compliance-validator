@@ -131,6 +131,7 @@ function validateFieldEntry(
       id: `sep12.${kind}.unknown_name`,
       description: `${kind} key should be a recognized SEP-9 field name`,
       status: "warn",
+      exercised: true,
       severity: "warning",
       message: `${kind}.${key}: "${key}" is not a standard SEP-9 field name (SEP-9 permits custom fields, but this may also be a typo of a standard name)`,
     });
@@ -190,6 +191,7 @@ function validateFieldEntry(
         id: "sep12.provided_fields.rejected_no_error",
         description: "REJECTED provided_fields entry should include an error message",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `provided_fields.${key}: status is REJECTED but no 'error' message was given explaining why`,
       });
