@@ -3,7 +3,10 @@ import {
   computeMetrics,
   filterEntries,
   formatRelativeTime,
+  getFailingChecks,
   getLast7Runs,
+  groupResultsBySep,
+  validateReportSchema,
 } from "../dashboard/dashboard-lib.mjs";
 
 const sampleEntries = [
@@ -157,3 +160,86 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime("invalid-date")).toBe("Invalid date");
   });
 });
+
+describe("validateReportSchema", () => {
+  it("accepts valid version 1 and version 2 reports", () => {
+    expect(
+      validateReportSchema({
+        schemaVersion: 2,
+        domain: "anchor.example.com",
+        results: [],
+      }).valid,
+    ).toBe(true);
+
+    expect(
+      validateReportSchema({
+        domain: "anchor.example.com",
+        results: [{ id: "sep1.fetch", status: "pass" }],
+      }).valid,
+    ).toBe(true);
+  });
+
+  it("rejects non-object or null reports", () => {
+    expect(validateReportSchema(null).valid).toBe(false);
+    expect(validateReportSchema("string").valid).toBe(false);
+  });
+
+  it("rejects future unsupported schemaVersion", () => {
+    const res = validateReportSchema({
+      schemaVersion: 99,
+      domain: "anchor.example.com",
+      results: [],
+    });
+    expect(res.valid).toBe(false);
+    expect(res.error).toContain("unsupported schemaVersion 99");
+  });
+
+  it("rejects reports missing domain or results array", () => {
+    expect(validateReportSchema({ results: [] }).valid).toBe(false);
+    expect(validateReportSchema({ domain: "anchor.example.com" }).valid).toBe(false);
+  });
+});
+
+describe("getFailingChecks", () => {
+  it("filters only failing or warning checks", () => {
+    const results = [
+      { id: "sep1.fetch", status: "pass" },
+      { id: "sep1.cors", status: "fail", message: "Missing header" },
+      { id: "sep10.auth", status: "warn", message: "Advisory" },
+      { id: "sep12.info", status: "pass" },
+    ];
+    const failing = getFailingChecks(results);
+    expect(failing).toHaveLength(2);
+    expect(failing.map((c) => c.id)).toEqual(["sep1.cors", "sep10.auth"]);
+  });
+});
+
+describe("groupResultsBySep", () => {
+  it("correctly groups results by SEP prefix", () => {
+    const results = [
+      { id: "sep1.fetch", status: "pass" },
+      { id: "sep1.parse", status: "pass" },
+      { id: "sep10.auth", status: "pass" },
+      { id: "sep12.customer", status: "pass" },
+      { id: "sep24.info", status: "pass" },
+      { id: "sep38.prices", status: "pass" },
+      { id: "custom.check", status: "pass" },
+    ];
+
+    const groups = groupResultsBySep(results);
+    expect(groups).toHaveLength(6);
+    expect(groups.map((g) => g.key)).toEqual(["sep1", "sep10", "sep12", "sep24", "sep38", "other"]);
+  });
+
+  it("omits empty groups", () => {
+    const results = [
+      { id: "sep1.fetch", status: "pass" },
+      { id: "sep1.parse", status: "pass" },
+    ];
+    const groups = groupResultsBySep(results);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe("sep1");
+    expect(groups[0].checks).toHaveLength(2);
+  });
+});
+

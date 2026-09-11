@@ -47,132 +47,217 @@
     </header>
 
     <main class="main-content" role="main">
-      <!-- Metrics Overview -->
-      <section class="metrics-grid" aria-label="Dashboard Key Metrics">
-        <div class="metric-card" id="card-total-anchors">
-          <div class="metric-header">
-            <span class="metric-label">Tracked Anchors</span>
-            <span class="metric-icon" aria-hidden="true">🌐</span>
-          </div>
-          <div class="metric-value" id="metric-total-anchors">-</div>
-          <div class="metric-subtext">Opted-in registry domains</div>
-        </div>
-
-        <div class="metric-card" id="card-compliance-rate">
-          <div class="metric-header">
-            <span class="metric-label">Compliance Rate</span>
-            <span class="metric-icon" aria-hidden="true">📈</span>
-          </div>
-          <div class="metric-value" id="metric-compliance-rate">-%</div>
-          <div class="metric-subtext" id="metric-passing-count">- anchors passing</div>
-        </div>
-
-        <div class="metric-card" id="card-failing-anchors">
-          <div class="metric-header">
-            <span class="metric-label">Failing Anchors</span>
-            <span class="metric-icon" aria-hidden="true">⚠️</span>
-          </div>
-          <div class="metric-value" id="metric-failing-count">-</div>
-          <div class="metric-subtext">Requires attention</div>
-        </div>
-
-        <div class="metric-card" id="card-last-updated">
-          <div class="metric-header">
-            <span class="metric-label">Last Crawl</span>
-            <span class="metric-icon" aria-hidden="true">🕒</span>
-          </div>
-          <div class="metric-value metric-value-sm" id="metric-last-updated">-</div>
-          <div class="metric-subtext" id="metric-last-updated-relative">Daily automated run</div>
-        </div>
-      </section>
-
-      <!-- Filter and Search Controls -->
-      <section class="controls-section" aria-label="Directory Filters and Search">
-        <div class="search-box">
-          <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-          </svg>
-          <input
-            type="search"
-            id="search-input"
-            class="input-search"
-            placeholder="Search anchors by domain..."
-            aria-label="Search anchors by domain"
-            autocomplete="off"
-            spellcheck="false"
-          >
-          <button id="clear-search-btn" class="btn-clear hidden" aria-label="Clear search">×</button>
-        </div>
-
-        <div class="filters-group">
-          <!-- Network Filter -->
-          <div class="filter-pill-group" role="radiogroup" aria-label="Network filter">
-            <span class="filter-group-label" id="label-network">Network:</span>
-            <button class="filter-pill active" data-filter-type="network" data-value="all" aria-checked="true" role="radio">All</button>
-            <button class="filter-pill" data-filter-type="network" data-value="testnet" aria-checked="false" role="radio">Testnet</button>
-            <button class="filter-pill" data-filter-type="network" data-value="mainnet" aria-checked="false" role="radio">Mainnet</button>
+      <!-- DIRECTORY OVERVIEW VIEW -->
+      <div id="directory-view">
+        <!-- Metrics Overview -->
+        <section class="metrics-grid" aria-label="Dashboard Key Metrics">
+          <div class="metric-card" id="card-total-anchors">
+            <div class="metric-header">
+              <span class="metric-label">Tracked Anchors</span>
+              <span class="metric-icon" aria-hidden="true">🌐</span>
+            </div>
+            <div class="metric-value" id="metric-total-anchors">-</div>
+            <div class="metric-subtext">Opted-in registry domains</div>
           </div>
 
-          <!-- Status Filter -->
-          <div class="filter-pill-group" role="radiogroup" aria-label="Status filter">
-            <span class="filter-group-label" id="label-status">Status:</span>
-            <button class="filter-pill active" data-filter-type="status" data-value="all" aria-checked="true" role="radio">All</button>
-            <button class="filter-pill" data-filter-type="status" data-value="pass" aria-checked="false" role="radio">Passing</button>
-            <button class="filter-pill" data-filter-type="status" data-value="fail" aria-checked="false" role="radio">Failing</button>
-            <button class="filter-pill" data-filter-type="status" data-value="warn" aria-checked="false" role="radio">Warnings</button>
+          <div class="metric-card" id="card-compliance-rate">
+            <div class="metric-header">
+              <span class="metric-label">Compliance Rate</span>
+              <span class="metric-icon" aria-hidden="true">📈</span>
+            </div>
+            <div class="metric-value" id="metric-compliance-rate">-%</div>
+            <div class="metric-subtext" id="metric-passing-count">- anchors passing</div>
+          </div>
+
+          <div class="metric-card" id="card-failing-anchors">
+            <div class="metric-header">
+              <span class="metric-label">Failing Anchors</span>
+              <span class="metric-icon" aria-hidden="true">⚠️</span>
+            </div>
+            <div class="metric-value" id="metric-failing-count">-</div>
+            <div class="metric-subtext">Requires attention</div>
+          </div>
+
+          <div class="metric-card" id="card-last-updated">
+            <div class="metric-header">
+              <span class="metric-label">Last Crawl</span>
+              <span class="metric-icon" aria-hidden="true">🕒</span>
+            </div>
+            <div class="metric-value metric-value-sm" id="metric-last-updated">-</div>
+            <div class="metric-subtext" id="metric-last-updated-relative">Daily automated run</div>
+          </div>
+        </section>
+
+        <!-- Filter and Search Controls -->
+        <section class="controls-section" aria-label="Directory Filters and Search">
+          <div class="search-box">
+            <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input
+              type="search"
+              id="search-input"
+              class="input-search"
+              placeholder="Search anchors by domain..."
+              aria-label="Search anchors by domain"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button id="clear-search-btn" class="btn-clear hidden" aria-label="Clear search">×</button>
+          </div>
+
+          <div class="filters-group">
+            <!-- Network Filter -->
+            <div class="filter-pill-group" role="radiogroup" aria-label="Network filter">
+              <span class="filter-group-label" id="label-network">Network:</span>
+              <button class="filter-pill active" data-filter-type="network" data-value="all" aria-checked="true" role="radio">All</button>
+              <button class="filter-pill" data-filter-type="network" data-value="testnet" aria-checked="false" role="radio">Testnet</button>
+              <button class="filter-pill" data-filter-type="network" data-value="mainnet" aria-checked="false" role="radio">Mainnet</button>
+            </div>
+
+            <!-- Status Filter -->
+            <div class="filter-pill-group" role="radiogroup" aria-label="Status filter">
+              <span class="filter-group-label" id="label-status">Status:</span>
+              <button class="filter-pill active" data-filter-type="status" data-value="all" aria-checked="true" role="radio">All</button>
+              <button class="filter-pill" data-filter-type="status" data-value="pass" aria-checked="false" role="radio">Passing</button>
+              <button class="filter-pill" data-filter-type="status" data-value="fail" aria-checked="false" role="radio">Failing</button>
+              <button class="filter-pill" data-filter-type="status" data-value="warn" aria-checked="false" role="radio">Warnings</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Active Filters Summary -->
+        <div id="filter-status-bar" class="filter-status-bar hidden" aria-live="polite">
+          <span id="results-count-text">Showing all anchors</span>
+          <button id="reset-filters-btn" class="btn-link">Reset filters</button>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="state-container hidden" role="status">
+          <div class="state-icon" aria-hidden="true">🔍</div>
+          <h2 class="state-title">No matching anchors found</h2>
+          <p class="state-text">No anchors match the current search query and filter criteria.</p>
+          <button id="clear-filters-action" class="btn btn-outline">Clear Search & Filters</button>
+        </div>
+
+        <!-- Anchor Directory Table -->
+        <div id="directory-container" class="directory-container hidden">
+          <div class="table-wrapper">
+            <table class="directory-table" aria-label="Anchor Compliance Directory">
+              <thead>
+                <tr>
+                  <th scope="col" class="th-domain">Anchor Domain</th>
+                  <th scope="col" class="th-network">Network</th>
+                  <th scope="col" class="th-status">Status</th>
+                  <th scope="col" class="th-checks">Checks Passing</th>
+                  <th scope="col" class="th-history">7-Day History</th>
+                  <th scope="col" class="th-actions">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="anchor-rows">
+                <!-- Dynamically populated rows -->
+              </tbody>
+            </table>
           </div>
         </div>
-      </section>
-
-      <!-- Active Filters Summary -->
-      <div id="filter-status-bar" class="filter-status-bar hidden" aria-live="polite">
-        <span id="results-count-text">Showing all anchors</span>
-        <button id="reset-filters-btn" class="btn-link">Reset filters</button>
       </div>
 
-      <!-- Loading State -->
+      <!-- ANCHOR DETAIL VIEW -->
+      <section id="detail-view" class="detail-view hidden" aria-label="Anchor Detailed Report View">
+        <nav class="detail-nav" aria-label="Breadcrumb">
+          <a href="#/" class="btn btn-outline btn-sm" id="back-to-directory-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+            </svg>
+            Back to Directory
+          </a>
+        </nav>
+
+        <!-- Detail Header -->
+        <div class="detail-header-card">
+          <div class="detail-header-main">
+            <div class="detail-domain-group">
+              <h2 id="detail-domain" class="detail-domain-title">-</h2>
+              <div class="detail-meta-badges">
+                <span id="detail-network-badge" class="badge">-</span>
+                <span id="detail-status-badge" class="badge">-</span>
+                <span id="detail-schema-badge" class="badge badge-subtle">Schema v2</span>
+              </div>
+            </div>
+            <div class="detail-header-actions">
+              <button id="download-report-btn" class="btn btn-primary btn-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Download Raw JSON
+              </button>
+            </div>
+          </div>
+
+          <!-- Detail Metrics Grid -->
+          <div class="detail-stats-grid">
+            <div class="detail-stat-item">
+              <span class="detail-stat-label">Passing</span>
+              <span id="detail-pass-count" class="detail-stat-val text-pass">0</span>
+            </div>
+            <div class="detail-stat-item">
+              <span class="detail-stat-label">Failing</span>
+              <span id="detail-fail-count" class="detail-stat-val text-fail">0</span>
+            </div>
+            <div class="detail-stat-item">
+              <span class="detail-stat-label">Warnings</span>
+              <span id="detail-warn-count" class="detail-stat-val text-warn">0</span>
+            </div>
+            <div class="detail-stat-item">
+              <span class="detail-stat-label">Total Checks</span>
+              <span id="detail-total-count" class="detail-stat-val">0</span>
+            </div>
+            <div class="detail-stat-item">
+              <span class="detail-stat-label">Last Validated</span>
+              <span id="detail-timestamp" class="detail-stat-val detail-stat-time">-</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top Priority Failing Checks Section -->
+        <div id="failing-checks-section" class="failing-checks-section hidden">
+          <div class="section-banner banner-fail">
+            <div class="banner-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <span>Action Required: Checks Failing or Warning</span>
+            </div>
+            <p class="banner-desc">These checks require attention from the anchor operator to achieve full compliance.</p>
+          </div>
+          <div id="failing-checks-list" class="checks-list"></div>
+        </div>
+
+        <!-- All Checks Grouped by SEP -->
+        <div class="sep-groups-container">
+          <h3 class="section-title">All Results by SEP Specification</h3>
+          <div id="sep-groups-list"></div>
+        </div>
+      </section>
+
+      <!-- Global Loading State -->
       <div id="loading-state" class="state-container" aria-live="polite">
         <div class="spinner" aria-hidden="true"></div>
-        <p class="state-text">Loading compliance data...</p>
+        <p class="state-text">Loading compliance report...</p>
       </div>
 
-      <!-- Error State -->
+      <!-- Global Error State -->
       <div id="error-state" class="state-container error-state hidden" role="alert">
         <div class="state-icon" aria-hidden="true">⚠️</div>
-        <h2 class="state-title">Unable to Load Summary Data</h2>
-        <p id="error-message" class="state-text">The compliance summary data is missing or could not be parsed.</p>
-        <button id="retry-btn" class="btn btn-primary">Retry Loading</button>
-      </div>
-
-      <!-- Empty State -->
-      <div id="empty-state" class="state-container hidden" role="status">
-        <div class="state-icon" aria-hidden="true">🔍</div>
-        <h2 class="state-title">No matching anchors found</h2>
-        <p class="state-text">No anchors match the current search query and filter criteria.</p>
-        <button id="clear-filters-action" class="btn btn-outline">Clear Search & Filters</button>
-      </div>
-
-      <!-- Anchor Directory Table -->
-      <div id="directory-container" class="directory-container hidden">
-        <div class="table-wrapper">
-          <table class="directory-table" aria-label="Anchor Compliance Directory">
-            <thead>
-              <tr>
-                <th scope="col" class="th-domain">Anchor Domain</th>
-                <th scope="col" class="th-network">Network</th>
-                <th scope="col" class="th-status">Status</th>
-                <th scope="col" class="th-checks">Checks Passing</th>
-                <th scope="col" class="th-history">7-Day History</th>
-                <th scope="col" class="th-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="anchor-rows">
-              <!-- Dynamically populated rows -->
-            </tbody>
-          </table>
+        <h2 class="state-title" id="error-title">Unable to Load Data</h2>
+        <p id="error-message" class="state-text">The requested data is missing or could not be parsed.</p>
+        <div class="state-actions">
+          <button id="retry-btn" class="btn btn-primary">Retry</button>
+          <a href="#/" id="error-back-btn" class="btn btn-outline hidden">Back to Directory</a>
         </div>
       </div>
     </main>
+
 
     <!-- Footer -->
     <footer class="footer" role="contentinfo">

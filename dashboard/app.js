@@ -6,10 +6,17 @@ import {
   filterEntries,
   getLast7Runs,
   formatRelativeTime,
+  groupResultsBySep,
+  getFailingChecks,
+  validateReportSchema,
 } from "./dashboard-lib.mjs";
 
 // Application State
 const state = {
+  currentView: "directory", // "directory" | "detail"
+  detailDomain: null,
+  detailNetwork: "testnet",
+  currentReport: null,
   allEntries: [],
   filteredEntries: [],
   search: "",
@@ -22,6 +29,10 @@ const state = {
 // DOM Elements
 const elements = {
   themeToggle: document.getElementById("theme-toggle"),
+  directoryView: document.getElementById("directory-view"),
+  detailView: document.getElementById("detail-view"),
+
+  // Directory View elements
   searchInput: document.getElementById("search-input"),
   clearSearchBtn: document.getElementById("clear-search-btn"),
   filterPills: document.querySelectorAll(".filter-pill"),
@@ -29,13 +40,9 @@ const elements = {
   resultsCountText: document.getElementById("results-count-text"),
   resetFiltersBtn: document.getElementById("reset-filters-btn"),
   clearFiltersAction: document.getElementById("clear-filters-action"),
-  loadingState: document.getElementById("loading-state"),
-  errorState: document.getElementById("error-state"),
-  errorMessage: document.getElementById("error-message"),
   emptyState: document.getElementById("empty-state"),
   directoryContainer: document.getElementById("directory-container"),
   anchorRows: document.getElementById("anchor-rows"),
-  retryBtn: document.getElementById("retry-btn"),
 
   // Metric elements
   metricTotalAnchors: document.getElementById("metric-total-anchors"),
@@ -44,6 +51,29 @@ const elements = {
   metricFailingCount: document.getElementById("metric-failing-count"),
   metricLastUpdated: document.getElementById("metric-last-updated"),
   metricLastUpdatedRelative: document.getElementById("metric-last-updated-relative"),
+
+  // Detail View elements
+  detailDomain: document.getElementById("detail-domain"),
+  detailNetworkBadge: document.getElementById("detail-network-badge"),
+  detailStatusBadge: document.getElementById("detail-status-badge"),
+  detailSchemaBadge: document.getElementById("detail-schema-badge"),
+  detailPassCount: document.getElementById("detail-pass-count"),
+  detailFailCount: document.getElementById("detail-fail-count"),
+  detailWarnCount: document.getElementById("detail-warn-count"),
+  detailTotalCount: document.getElementById("detail-total-count"),
+  detailTimestamp: document.getElementById("detail-timestamp"),
+  downloadReportBtn: document.getElementById("download-report-btn"),
+  failingChecksSection: document.getElementById("failing-checks-section"),
+  failingChecksList: document.getElementById("failing-checks-list"),
+  sepGroupsList: document.getElementById("sep-groups-list"),
+
+  // Global State containers
+  loadingState: document.getElementById("loading-state"),
+  errorState: document.getElementById("error-state"),
+  errorTitle: document.getElementById("error-title"),
+  errorMessage: document.getElementById("error-message"),
+  errorBackBtn: document.getElementById("error-back-btn"),
+  retryBtn: document.getElementById("retry-btn"),
 };
 
 // Theme Management
@@ -66,7 +96,38 @@ function setTheme(theme) {
   localStorage.setItem("sep-dashboard-theme", theme);
 }
 
-// Data Fetching
+// Router
+function parseRoute() {
+  const hash = window.location.hash || "";
+  if (hash.startsWith("#/anchor/")) {
+    const raw = hash.replace("#/anchor/", "");
+    const parts = raw.split("?");
+    const domain = decodeURIComponent(parts[0]);
+    let network = "testnet";
+    if (parts[1]) {
+      const params = new URLSearchParams(parts[1]);
+      network = params.get("network") || "testnet";
+    }
+    return { view: "detail", domain, network };
+  }
+  return { view: "directory" };
+}
+
+function handleRoute() {
+  const route = parseRoute();
+  if (route.view === "detail" && route.domain) {
+    state.currentView = "detail";
+    state.detailDomain = route.domain;
+    state.detailNetwork = route.network;
+    loadAnchorDetail(route.domain, route.network);
+  } else {
+    state.currentView = "directory";
+    state.detailDomain = null;
+    showDirectoryView();
+  }
+}
+
+// Data Fetching for Directory Overview
 async function fetchSummaryData() {
   state.loading = true;
   state.error = null;
@@ -101,27 +162,205 @@ async function fetchSummaryData() {
     applyFilters();
   } else {
     state.loading = false;
-    state.error = lastError ? lastError.message : "Failed to load summary.json (404 or empty)";
+    state.error = lastError ? lastError.message : "Failed to load summary.json (file missing or malformed)";
     renderState();
   }
 }
 
-// Metrics Updating
+// Data Fetching for Anchor Detail View
+async function loadAnchorDetail(domain, network) {
+  state.loading = true;
+  state.error = null;
+  state.currentReport = null;
+  renderState();
+
+  const candidates = [
+    `./data/reports/${encodeURIComponent(domain)}/${encodeURIComponent(network)}/latest.json`,
+    `../data/reports/${encodeURIComponent(domain)}/${encodeURIComponent(network)}/latest.json`,
+    `data/reports/${encodeURIComponent(domain)}/${encodeURIComponent(network)}/latest.json`,
+  ];
+
+  let report = null;
+  let lastError = null;
+
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const text = await response.text();
+        report = JSON.parse(text.replace(/^\uFEFF/, ""));
+        break;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (!report) {
+    state.loading = false;
+    state.error = `No report found for anchor "${domain}" on ${network}. ${lastError ? lastError.message : ""}`;
+    renderState();
+    return;
+  }
+
+  const validation = validateReportSchema(report);
+  if (!validation.valid) {
+    state.loading = false;
+    state.error = `Invalid report structure: ${validation.error}`;
+    renderState();
+    return;
+  }
+
+  state.currentReport = report;
+  state.loading = false;
+  renderDetailView(report);
+  renderState();
+}
+
+// Render Anchor Detail View
+function renderDetailView(report) {
+  const domain = report.domain;
+  const network = report.network || state.detailNetwork;
+  const results = Array.isArray(report.results) ? report.results : [];
+
+  const passCount = results.filter((r) => r.status === "pass").length;
+  const failCount = results.filter((r) => r.status === "fail").length;
+  const warnCount = results.filter((r) => r.status === "warn").length;
+  const totalCount = results.length;
+
+  let overallStatus = "pass";
+  if (failCount > 0) overallStatus = "fail";
+  else if (warnCount > 0 || totalCount === 0) overallStatus = "warn";
+
+  // Set Header Info
+  if (elements.detailDomain) elements.detailDomain.textContent = domain;
+  if (elements.detailNetworkBadge) {
+    elements.detailNetworkBadge.className = `badge ${network === "mainnet" ? "badge-network-mainnet" : "badge-network-testnet"}`;
+    elements.detailNetworkBadge.textContent = network.toUpperCase();
+  }
+  if (elements.detailStatusBadge) {
+    elements.detailStatusBadge.className = `badge badge-status-${overallStatus}`;
+    elements.detailStatusBadge.textContent = overallStatus.toUpperCase();
+  }
+  if (elements.detailSchemaBadge) {
+    elements.detailSchemaBadge.textContent = `Schema v${report.schemaVersion ?? 1}`;
+  }
+
+  // Set Stats Counts
+  if (elements.detailPassCount) elements.detailPassCount.textContent = passCount.toString();
+  if (elements.detailFailCount) elements.detailFailCount.textContent = failCount.toString();
+  if (elements.detailWarnCount) elements.detailWarnCount.textContent = warnCount.toString();
+  if (elements.detailTotalCount) elements.detailTotalCount.textContent = totalCount.toString();
+  if (elements.detailTimestamp) {
+    elements.detailTimestamp.textContent = report.timestamp
+      ? new Date(report.timestamp).toLocaleString()
+      : "Unknown";
+  }
+
+  // Render Failing / Warning Checks Banner
+  const failingChecks = getFailingChecks(results);
+  if (elements.failingChecksSection && elements.failingChecksList) {
+    if (failingChecks.length > 0) {
+      elements.failingChecksSection.classList.remove("hidden");
+      elements.failingChecksList.innerHTML = failingChecks.map((check) => renderCheckCard(check)).join("");
+    } else {
+      elements.failingChecksSection.classList.add("hidden");
+      elements.failingChecksList.innerHTML = "";
+    }
+  }
+
+  // Render Checks Grouped by SEP
+  const sepGroups = groupResultsBySep(results);
+  if (elements.sepGroupsList) {
+    elements.sepGroupsList.innerHTML = sepGroups.map((group) => {
+      const gPass = group.checks.filter((c) => c.status === "pass").length;
+      const gFail = group.checks.filter((c) => c.status === "fail").length;
+      const gWarn = group.checks.filter((c) => c.status === "warn").length;
+
+      return `
+        <div class="sep-group-card">
+          <div class="sep-group-header">
+            <span class="sep-group-title">${group.title}</span>
+            <div class="sep-group-counts">
+              <span class="badge badge-status-pass">${gPass} Pass</span>
+              ${gFail > 0 ? `<span class="badge badge-status-fail">${gFail} Fail</span>` : ""}
+              ${gWarn > 0 ? `<span class="badge badge-status-warn">${gWarn} Warn</span>` : ""}
+            </div>
+          </div>
+          <div class="checks-list">
+            ${group.checks.map((check) => renderCheckCard(check)).join("")}
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+}
+
+// Render individual check item card
+function renderCheckCard(check) {
+  const status = check.status || "warn";
+  const severity = check.severity || "error";
+  const statusClass = `check-card-${status}`;
+  const messageClass = `check-message-${status}`;
+
+  const statusLabel = status === "pass" ? "PASS" : status === "fail" ? "FAIL" : "WARN";
+  const badgeClass = `badge-status-${status}`;
+
+  return `
+    <div class="check-card ${statusClass}">
+      <div class="check-card-header">
+        <div class="check-meta-left">
+          <span class="badge ${badgeClass}">${statusLabel}</span>
+          <span class="check-id">${check.id}</span>
+          <span class="badge badge-subtle">${severity.toUpperCase()}</span>
+        </div>
+        <span class="check-desc">${check.description || ""}</span>
+      </div>
+      ${check.message ? `<div class="check-message ${messageClass}">${escapeHtml(check.message)}</div>` : ""}
+    </div>
+  `;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function showDirectoryView() {
+  state.currentView = "directory";
+  renderState();
+  if (state.allEntries.length === 0) {
+    fetchSummaryData();
+  }
+}
+
+// Download raw report JSON
+function downloadRawReport() {
+  if (!state.currentReport) return;
+  const jsonStr = JSON.stringify(state.currentReport, null, 2);
+  const blob = new Blob([jsonStr], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${state.currentReport.domain}-${state.currentReport.network || "report"}-latest.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Metrics Updating for Directory View
 function updateMetrics() {
   const metrics = computeMetrics(state.allEntries);
 
-  if (elements.metricTotalAnchors) {
-    elements.metricTotalAnchors.textContent = metrics.total.toString();
-  }
-  if (elements.metricComplianceRate) {
-    elements.metricComplianceRate.textContent = `${metrics.complianceRate}%`;
-  }
-  if (elements.metricPassingCount) {
-    elements.metricPassingCount.textContent = `${metrics.passing} of ${metrics.total} passing`;
-  }
-  if (elements.metricFailingCount) {
-    elements.metricFailingCount.textContent = metrics.failing.toString();
-  }
+  if (elements.metricTotalAnchors) elements.metricTotalAnchors.textContent = metrics.total.toString();
+  if (elements.metricComplianceRate) elements.metricComplianceRate.textContent = `${metrics.complianceRate}%`;
+  if (elements.metricPassingCount) elements.metricPassingCount.textContent = `${metrics.passing} of ${metrics.total} passing`;
+  if (elements.metricFailingCount) elements.metricFailingCount.textContent = metrics.failing.toString();
   if (elements.metricLastUpdated) {
     elements.metricLastUpdated.textContent = metrics.lastUpdated
       ? new Date(metrics.lastUpdated).toLocaleDateString()
@@ -235,45 +474,63 @@ function renderDirectory() {
 
 // UI State Management
 function renderState() {
-  // Hide all state containers first
   elements.loadingState?.classList.add("hidden");
   elements.errorState?.classList.add("hidden");
-  elements.emptyState?.classList.add("hidden");
-  elements.directoryContainer?.classList.add("hidden");
 
   if (state.loading) {
     elements.loadingState?.classList.remove("hidden");
+    elements.directoryView?.classList.add("hidden");
+    elements.detailView?.classList.add("hidden");
     return;
   }
 
   if (state.error) {
-    if (elements.errorMessage) {
-      elements.errorMessage.textContent = state.error;
+    if (elements.errorMessage) elements.errorMessage.textContent = state.error;
+    if (elements.errorTitle) {
+      elements.errorTitle.textContent = state.currentView === "detail" ? "Report Not Found" : "Unable to Load Data";
+    }
+    if (elements.errorBackBtn) {
+      elements.errorBackBtn.classList.toggle("hidden", state.currentView !== "detail");
     }
     elements.errorState?.classList.remove("hidden");
+    elements.directoryView?.classList.add("hidden");
+    elements.detailView?.classList.add("hidden");
     return;
   }
 
-  if (state.filteredEntries.length === 0) {
-    elements.emptyState?.classList.remove("hidden");
+  if (state.currentView === "detail") {
+    elements.directoryView?.classList.add("hidden");
+    elements.detailView?.classList.remove("hidden");
   } else {
-    elements.directoryContainer?.classList.remove("hidden");
-  }
+    elements.detailView?.classList.add("hidden");
+    elements.directoryView?.classList.remove("hidden");
 
-  // Update filter status bar
-  const hasActiveFilters = state.search || state.network !== "all" || state.status !== "all";
-  if (hasActiveFilters) {
-    elements.filterStatusBar?.classList.remove("hidden");
-    if (elements.resultsCountText) {
-      elements.resultsCountText.textContent = `Showing ${state.filteredEntries.length} of ${state.allEntries.length} anchors`;
+    if (state.filteredEntries.length === 0) {
+      elements.emptyState?.classList.remove("hidden");
+      elements.directoryContainer?.classList.add("hidden");
+    } else {
+      elements.emptyState?.classList.add("hidden");
+      elements.directoryContainer?.classList.remove("hidden");
     }
-  } else {
-    elements.filterStatusBar?.classList.add("hidden");
+
+    // Filter status bar
+    const hasActiveFilters = state.search || state.network !== "all" || state.status !== "all";
+    if (hasActiveFilters) {
+      elements.filterStatusBar?.classList.remove("hidden");
+      if (elements.resultsCountText) {
+        elements.resultsCountText.textContent = `Showing ${state.filteredEntries.length} of ${state.allEntries.length} anchors`;
+      }
+    } else {
+      elements.filterStatusBar?.classList.add("hidden");
+    }
   }
 }
 
 // Event Listeners
 function setupEventListeners() {
+  // Hash Routing
+  window.addEventListener("hashchange", handleRoute);
+
   // Search input
   elements.searchInput?.addEventListener("input", (e) => {
     state.search = e.target.value;
@@ -302,7 +559,6 @@ function setupEventListeners() {
         state.status = filterValue;
       }
 
-      // Update pill active classes within the group
       const parent = pill.parentElement;
       parent?.querySelectorAll(".filter-pill").forEach((p) => {
         p.classList.remove("active");
@@ -324,7 +580,6 @@ function setupEventListeners() {
     if (elements.searchInput) elements.searchInput.value = "";
     elements.clearSearchBtn?.classList.add("hidden");
 
-    // Reset pill styles
     document.querySelectorAll(".filter-pill-group").forEach((group) => {
       group.querySelectorAll(".filter-pill").forEach((pill) => {
         const isAll = pill.getAttribute("data-value") === "all";
@@ -338,12 +593,22 @@ function setupEventListeners() {
 
   elements.resetFiltersBtn?.addEventListener("click", resetHandler);
   elements.clearFiltersAction?.addEventListener("click", resetHandler);
-  elements.retryBtn?.addEventListener("click", () => fetchSummaryData());
+
+  elements.retryBtn?.addEventListener("click", () => {
+    if (state.currentView === "detail" && state.detailDomain) {
+      loadAnchorDetail(state.detailDomain, state.detailNetwork);
+    } else {
+      fetchSummaryData();
+    }
+  });
+
+  // Download Report Action
+  elements.downloadReportBtn?.addEventListener("click", downloadRawReport);
 }
 
 // Initialization
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   setupEventListeners();
-  fetchSummaryData();
+  handleRoute();
 });

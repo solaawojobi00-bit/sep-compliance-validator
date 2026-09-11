@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 2,
+  "domain": "testanchor.stellar.org",
+  "network": "testnet",
+  "timestamp": "2026-09-04T00:00:00Z",
+  "results": [
+    {
+      "id": "sep1.fetch",
+      "description": "Fetch stellar.toml from /.well-known/stellar.toml",
+      "status": "pass",
+      "severity": "error",
+      "message": "Fetched https://testanchor.stellar.org/.well-known/stellar.toml"
+    },
+    {
+      "id": "sep1.cors_header",
+      "description": "stellar.toml is served with Access-Control-Allow-Origin: *",
+      "status": "pass",
+      "severity": "error",
+      "message": "Access-Control-Allow-Origin is set to *"
+    },
+    {
+      "id": "sep1.content_type",
+      "description": "stellar.toml is served with Content-Type: text/plain",
+      "status": "pass",
+      "severity": "warning",
+      "message": "Content-Type is \"text/plain\""
+    },
+    {
+      "id": "sep1.file_size",
+      "description": "stellar.toml size is within 100KB limit",
+      "status": "pass",
+      "severity": "error",
+      "message": "stellar.toml size is 1024 bytes (within 100KB limit)"
+    },
+    {
+      "id": "sep1.parse",
+      "description": "Parse stellar.toml as valid TOML",
+      "status": "pass",
+      "severity": "error",
+      "message": "stellar.toml parsed successfully"
+    },
+    {
+      "id": "sep1.version",
+      "description": "stellar.toml declares VERSION",
+      "status": "pass",
+      "severity": "error",
+      "message": "VERSION = 2.0.0"
+    },
+    {
+      "id": "sep1.web_auth_endpoint",
+      "description": "stellar.toml declares WEB_AUTH_ENDPOINT",
+      "status": "pass",
+      "severity": "error",
+      "message": "WEB_AUTH_ENDPOINT = https://testanchor.stellar.org/auth"
+    },
+    {
+      "id": "sep1.signing_key",
+      "description": "stellar.toml declares SIGNING_KEY",
+      "status": "pass",
+      "severity": "error",
+      "message": "SIGNING_KEY = GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+    },
+    {
+      "id": "sep10.challenge_response",
+      "description": "Complete SEP-10 challenge flow and obtain signed JWT",
+      "status": "pass",
+      "severity": "error",
+      "message": "Successfully authenticated via SEP-10"
+    },
+    {
+      "id": "sep12.get_customer",
+      "description": "Query GET /customer endpoint",
+      "status": "pass",
+      "severity": "error",
+      "message": "GET /customer returned HTTP 200 with valid schema"
+    },
+    {
+      "id": "sep24.info",
+      "description": "Query GET /info for interactive deposit/withdraw assets",
+      "status": "warn",
+      "exercised": true,
+      "severity": "warning",
+      "message": "No SEP-24 assets enabled for deposit"
+    }
+  ]
+}
