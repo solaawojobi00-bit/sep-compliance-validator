@@ -1,0 +1,26 @@
+[
+  {
+    "domain": "testanchor.stellar.org",
+    "name": "Stellar Test Anchor",
+    "network": "testnet",
+    "lastChecked": "2026-09-04T00:00:00Z",
+    "status": "pass",
+    "completeness": "full",
+    "summary": {
+      "pass": 10,
+      "fail": 0,
+      "warn": 1,
+      "notVerified": 1,
+      "total": 11
+    },
+    "history": [
+      { "timestamp": "2026-08-29T00:00:00Z", "status": "pass", "completeness": "full" },
+      { "timestamp": "2026-08-30T00:00:00Z", "status": "pass", "completeness": "full" },
+      { "timestamp": "2026-08-31T00:00:00Z", "status": "pass", "completeness": "full" },
+      { "timestamp": "2026-09-01T00:00:00Z", "status": "pass", "completeness": "full" },
+      { "timestamp": "2026-09-02T00:00:00Z", "status": "warn", "completeness": "full" },
+      { "timestamp": "2026-09-03T00:00:00Z", "status": "pass", "completeness": "full" },
+      { "timestamp": "2026-09-04T00:00:00Z", "status": "pass", "completeness": "full" }
+    ]
+  }
+]
