@@ -11,14 +11,17 @@
  *
  * Usage: node scripts/check-registry-domains.mjs <base-registry.json> <head-registry.json>
  */
-import { readFileSync } from "node:fs";
-import { changedEntries, normalizeDomain } from "./registry-lib.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { changedEntries, evaluateOwnershipProof, normalizeDomain } from "./registry-lib.mjs";
 import { parseStellarToml } from "../dist/checks/sep1.js";
 // fetchWithTimeout rather than bare fetch: it applies the timeout and, per #78, unwraps
 // err.cause so a DNS or TLS failure says what actually went wrong instead of the
 // useless "fetch failed" that Node's fetch reports.
 import { fetchWithTimeout } from "../dist/core/http.js";
 
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TIMEOUT_MS = 15_000;
 const RETRY_DELAY_MS = 10_000;
 
@@ -35,6 +38,23 @@ function readRegistry(path, fallbackToEmpty) {
     console.error(`::error::Cannot read registry at ${path}: ${err.message}`);
     process.exit(1);
   }
+}
+
+function readProof(domain, network) {
+  const candidates = [
+    join(repoRoot, "registry", "proofs", `${domain}.${network}.json`),
+    join(repoRoot, "registry", "proofs", `${domain}.json`),
+  ];
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(readFileSync(path, "utf-8").replace(/^﻿/, ""));
+      } catch (err) {
+        return { __readError: `Failed to parse proof JSON at ${path}: ${err.message}` };
+      }
+    }
+  }
+  return null;
 }
 
 /** One attempt: returns { ok, status, text } or throws for a transport-level failure. */
@@ -93,7 +113,7 @@ for (const entry of pending) {
     // parseStellarToml reports the parse outcome as a sep1.parse CheckResult; anything
     // other than a pass means the body is not a stellar.toml (commonly an HTML error
     // page served with a 200).
-    const { results } = parseStellarToml(res.text, network, domain);
+    const { toml, results } = parseStellarToml(res.text, network, domain);
     const parse = results.find((r) => r.id === "sep1.parse");
 
     if (!parse || parse.status !== "pass") {
@@ -102,6 +122,24 @@ for (const entry of pending) {
     }
 
     console.log(`  ${domain} (${network}): stellar.toml reachable and parseable`);
+
+    const tomlSigningKey = toml?.signingKey;
+    const proof = readProof(domain, network);
+
+    if (proof?.__readError) {
+      failures.push(`${domain}: ${proof.__readError}`);
+      continue;
+    }
+
+    const proofEval = evaluateOwnershipProof({ entry, tomlSigningKey, proof });
+
+    if (proofEval.status === "verified") {
+      console.log(`  ${domain} (${network}): domain ownership verified via SIGNING_KEY (${proofEval.signingKey})`);
+    } else if (proofEval.status === "manual_review") {
+      console.log(`::notice::${domain} (${network}): ${proofEval.message}`);
+    } else {
+      failures.push(`${domain}: domain ownership verification failed - ${proofEval.message}`);
+    }
   } catch (err) {
     failures.push(`${domain}: could not fetch stellar.toml - ${err.message}`);
   }
@@ -112,12 +150,12 @@ if (failures.length > 0) {
     console.error(`::error::${failure}`);
   }
   console.error(
-    "\nA registered anchor must serve a parseable stellar.toml: the dashboard has nothing " +
-      "to publish otherwise, and an unreachable domain cannot be shown to be yours. Fix " +
-      "the anchor and push again, or ask a maintainer to re-run this job if the failure " +
-      "was a transient outage.",
+    "\nA registered anchor must serve a parseable stellar.toml and prove domain ownership " +
+      "via its published SIGNING_KEY. Fix the problem and push again, or ask a maintainer " +
+      "to review/re-run if the failure was a transient outage or requires manual verification.",
   );
   process.exit(1);
 }
 
 console.log(`\nAll ${pending.length} domain(s) verified.`);
+

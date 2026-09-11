@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { Keypair } from "@stellar/stellar-sdk";
 import {
   changedEntries,
+  createProofMessage,
   enabledEntries,
+  evaluateOwnershipProof,
   findDuplicates,
   normalizeDomain,
   validateAgainstSchema,
+  verifyProofSignature,
 } from "../scripts/registry-lib.mjs";
 
 const schema = JSON.parse(readFileSync(new URL("../registry/schema.json", import.meta.url), "utf-8"));
@@ -201,3 +205,163 @@ describe("normalizeDomain", () => {
     expect(normalizeDomain(42)).toBe("");
   });
 });
+
+describe("createProofMessage", () => {
+  it("formats canonical proof message with normalized domain", () => {
+    const msg = createProofMessage({
+      domain: "  Anchor.Example.COM  ",
+      network: "testnet",
+      addedAt: "2026-09-04T00:00:00Z",
+    });
+    expect(msg).toBe("stellar-anchor-registry:anchor.example.com:testnet:2026-09-04T00:00:00Z");
+  });
+});
+
+describe("verifyProofSignature", () => {
+  const keypair = Keypair.random();
+  const signingKey = keypair.publicKey();
+  const message = "stellar-anchor-registry:anchor.example.com:testnet:2026-09-04T00:00:00Z";
+  const signature = Buffer.from(keypair.sign(Buffer.from(message, "utf-8"))).toString("base64");
+
+  it("returns true for a valid signature", () => {
+    expect(verifyProofSignature({ message, signingKey, signature })).toBe(true);
+  });
+
+  it("returns false for a signature from a different keypair", () => {
+    const otherKeypair = Keypair.random();
+    expect(verifyProofSignature({ message, signingKey: otherKeypair.publicKey(), signature })).toBe(false);
+  });
+
+  it("returns false for tampered message content", () => {
+    expect(
+      verifyProofSignature({
+        message: "stellar-anchor-registry:different.example.com:testnet:2026-09-04T00:00:00Z",
+        signingKey,
+        signature,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for malformed base64 or invalid signature buffer length", () => {
+    expect(
+      verifyProofSignature({
+        message,
+        signingKey,
+        signature: Buffer.from("short").toString("base64"),
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for invalid public key", () => {
+    expect(
+      verifyProofSignature({
+        message,
+        signingKey: "NOT_A_VALID_STELLAR_KEY",
+        signature,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when inputs are missing", () => {
+    expect(verifyProofSignature({ message: "", signingKey, signature })).toBe(false);
+    expect(verifyProofSignature({ message, signingKey: "", signature })).toBe(false);
+    expect(verifyProofSignature({ message, signingKey, signature: "" })).toBe(false);
+  });
+});
+
+describe("evaluateOwnershipProof", () => {
+  const keypair = Keypair.random();
+  const signingKey = keypair.publicKey();
+  const entry = { ...validEntry };
+  const message = createProofMessage(entry);
+  const signature = Buffer.from(keypair.sign(Buffer.from(message, "utf-8"))).toString("base64");
+
+  const validProof = {
+    domain: entry.domain,
+    network: entry.network,
+    addedAt: entry.addedAt,
+    signingKey,
+    signature,
+  };
+
+  it("verifies a valid proof matching stellar.toml SIGNING_KEY", () => {
+    const res = evaluateOwnershipProof({
+      entry,
+      tomlSigningKey: signingKey,
+      proof: validProof,
+    });
+    expect(res.status).toBe("verified");
+    expect(res.signingKey).toBe(signingKey);
+    expect(res.message).toContain("verified");
+  });
+
+  it("falls back to manual review if stellar.toml has no SIGNING_KEY", () => {
+    const res = evaluateOwnershipProof({
+      entry,
+      tomlSigningKey: undefined,
+      proof: validProof,
+    });
+    expect(res.status).toBe("manual_review");
+    expect(res.message).toContain("maintainer review");
+  });
+
+  it("returns missing_proof if stellar.toml declares SIGNING_KEY but proof is missing", () => {
+    const res = evaluateOwnershipProof({
+      entry,
+      tomlSigningKey: signingKey,
+      proof: null,
+    });
+    expect(res.status).toBe("missing_proof");
+    expect(res.message).toContain("no proof file was found");
+  });
+
+  it("detects replayed proof with mismatched domain", () => {
+    const res = evaluateOwnershipProof({
+      entry: { ...entry, domain: "other.example.com" },
+      tomlSigningKey: signingKey,
+      proof: validProof,
+    });
+    expect(res.status).toBe("mismatched_payload");
+    expect(res.message).toContain("payload mismatch");
+  });
+
+  it("detects replayed proof with mismatched network or addedAt", () => {
+    const resNet = evaluateOwnershipProof({
+      entry: { ...entry, network: "mainnet" },
+      tomlSigningKey: signingKey,
+      proof: validProof,
+    });
+    expect(resNet.status).toBe("mismatched_payload");
+
+    const resDate = evaluateOwnershipProof({
+      entry: { ...entry, addedAt: "2026-09-10T00:00:00Z" },
+      tomlSigningKey: signingKey,
+      proof: validProof,
+    });
+    expect(resDate.status).toBe("mismatched_payload");
+  });
+
+  it("rejects proof with key_mismatch when proof signingKey != toml SIGNING_KEY", () => {
+    const otherKey = Keypair.random().publicKey();
+    const res = evaluateOwnershipProof({
+      entry,
+      tomlSigningKey: otherKey,
+      proof: validProof,
+    });
+    expect(res.status).toBe("key_mismatch");
+    expect(res.message).toContain("does not match SIGNING_KEY");
+  });
+
+  it("rejects invalid signature for the published SIGNING_KEY", () => {
+    const otherKp = Keypair.random();
+    const invalidSig = Buffer.from(otherKp.sign(Buffer.from(message, "utf-8"))).toString("base64");
+    const res = evaluateOwnershipProof({
+      entry,
+      tomlSigningKey: signingKey,
+      proof: { ...validProof, signature: invalidSig },
+    });
+    expect(res.status).toBe("invalid_signature");
+    expect(res.message).toContain("signature is invalid");
+  });
+});
+
