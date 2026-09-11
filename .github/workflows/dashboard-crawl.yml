@@ -17,11 +17,21 @@ name: Dashboard crawl
 on:
   schedule:
     # 00:00 UTC daily, per section 5.1.
-    - cron: "0 0 * * *"
-  # Manual runs only, with no per-domain input and no rate limiting: the on-demand
-  # trigger is deliberately out of scope here and belongs to its own issue. This exists
-  # so the workflow can be exercised without waiting for midnight.
+  # Manual or on-demand trigger: supports validating all anchors or a single domain/network with 6-hour rate limiting.
   workflow_dispatch:
+    inputs:
+      domain:
+        description: "Domain of the anchor to re-check (must be registered and enabled in registry/anchors.json; leave blank for full crawl)"
+        required: false
+        type: string
+      network:
+        description: "Network of the anchor (optional: testnet or mainnet)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - testnet
+          - mainnet
 
 # Only the data branch is written, and only by the commit step below.
 permissions:
@@ -84,11 +94,24 @@ jobs:
         git init -q -b dashboard-data
         git commit -q --allow-empty -m "chore(data): initialise the dashboard archive"
 
-    - name: Crawl every enabled anchor
-      run: node scripts/crawl/crawl.mjs --data-root data-store
+    - name: Crawl anchors
+      env:
+        INPUT_DOMAIN: ${{ inputs.domain }}
+        INPUT_NETWORK: ${{ inputs.network }}
+      run: |
+        set -euo pipefail
+        ARGS=""
+        if [ -n "${INPUT_DOMAIN}" ]; then
+          ARGS="$ARGS --domain ${INPUT_DOMAIN}"
+        fi
+        if [ -n "${INPUT_NETWORK}" ]; then
+          ARGS="$ARGS --network ${INPUT_NETWORK}"
+        fi
+        node scripts/crawl/crawl.mjs --data-root data-store $ARGS
 
     - name: Publish the archive
       env:
+        INPUT_DOMAIN: ${{ inputs.domain }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
@@ -104,8 +127,12 @@ jobs:
           exit 0
         fi
 
-        git commit -q -m "chore(data): crawl results $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -m "Published by ${RUN_URL}"
+        COMMIT_MSG="chore(data): crawl results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [ -n "${INPUT_DOMAIN}" ]; then
+          COMMIT_MSG="chore(data): on-demand re-check ${INPUT_DOMAIN} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        fi
+
+        git commit -q -m "$COMMIT_MSG" -m "Published by ${RUN_URL}"
         git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" HEAD:dashboard-data
 
     # Kept regardless of whether the push happened, so a failed publish can still be

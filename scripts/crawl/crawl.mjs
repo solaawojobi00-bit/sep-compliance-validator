@@ -30,6 +30,7 @@ import { runLeg } from "./run-anchor.mjs";
 import { anchorDir, latestPath, parseFileStamp, reportPath, SUMMARY_PATH } from "./storage-paths.mjs";
 import { classifyDetailFiles } from "./prune-retention.mjs";
 import { buildSummary } from "./aggregate-summary.mjs";
+import { checkRateLimit, validateOnDemandTarget } from "./rate-limit.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cliPath = join(repoRoot, "dist", "cli.js");
@@ -154,12 +155,31 @@ async function main() {
   const registry = await readJson(registryPath);
   const onlyDomain = arg("domain") ? normalizeDomain(arg("domain")) : undefined;
   const onlyNetwork = arg("network");
+  const force = process.argv.includes("--force") || process.argv.includes("--skip-rate-limit");
 
   let targets = enabledEntries(registry);
   if (onlyDomain) {
-    targets = targets.filter((e) => normalizeDomain(e.domain) === onlyDomain);
-  }
-  if (onlyNetwork) {
+    const validation = validateOnDemandTarget(registry, onlyDomain, onlyNetwork);
+    if (!validation.valid) {
+      console.error(`::error::${validation.reason}`);
+      process.exit(1);
+    }
+    targets = validation.targets;
+
+    if (!force) {
+      for (const target of targets) {
+        const rateCheck = await checkRateLimit({
+          dataRoot,
+          domain: target.domain,
+          network: target.network,
+        });
+        if (!rateCheck.allowed) {
+          console.error(`::error::${rateCheck.reason}`);
+          process.exit(1);
+        }
+      }
+    }
+  } else if (onlyNetwork) {
     targets = targets.filter((e) => e.network === onlyNetwork);
   }
 
@@ -196,10 +216,20 @@ async function main() {
 
   const now = crawlTimestamp();
   let pruned = 0;
-  const groups = [];
   for (const { domain, network } of crawled) {
     pruned += await pruneArchive(domain, network, now);
-    groups.push({ domain, network, reports: await readArchive(domain, network) });
+  }
+
+  // Read all enabled registry entries to keep summary.json complete during on-demand single-anchor runs
+  const allEnabled = enabledEntries(registry);
+  const groups = [];
+  for (const entry of allEnabled) {
+    const domain = normalizeDomain(entry.domain);
+    const network = entry.network;
+    const reports = await readArchive(domain, network);
+    if (reports.length > 0) {
+      groups.push({ domain, network, reports });
+    }
   }
 
   const summary = buildSummary(

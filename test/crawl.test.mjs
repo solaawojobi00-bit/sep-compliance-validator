@@ -26,6 +26,16 @@ import { isCrawlUnavailable } from "../scripts/crawl/crawl-markers.mjs";
 import { isNotVerifiedV1 } from "../scripts/crawl/legacy-v1-inconclusive.mjs";
 import { fileStamp, latestPath, parseFileStamp, reportPath } from "../scripts/crawl/storage-paths.mjs";
 import { looksTransient } from "../scripts/crawl/run-anchor.mjs";
+import {
+  checkRateLimit,
+  getLatestReportTimestamp,
+  RATE_LIMIT_HOURS,
+  RATE_LIMIT_MS,
+  validateOnDemandTarget,
+} from "../scripts/crawl/rate-limit.mjs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const core = legById("core");
 const kyc = legById("kyc");
@@ -603,3 +613,142 @@ describe("run-anchor: transient detection drives the one retry", () => {
     ).toBe(false);
   });
 });
+
+describe("rate-limit: registry targets & durable cooldown", () => {
+  const sampleRegistry = [
+    { domain: "testanchor.stellar.org", network: "testnet", enabled: true },
+    { domain: "mainnetanchor.stellar.org", network: "mainnet", enabled: true },
+    { domain: "dualanchor.stellar.org", network: "testnet", enabled: true },
+    { domain: "dualanchor.stellar.org", network: "mainnet", enabled: true },
+    { domain: "optedout.stellar.org", network: "testnet", enabled: false },
+  ];
+
+  it("validates registered and enabled domain", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "testanchor.stellar.org");
+    expect(result.valid).toBe(true);
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0].domain).toBe("testanchor.stellar.org");
+  });
+
+  it("filters by network when provided", () => {
+    const testnetResult = validateOnDemandTarget(sampleRegistry, "dualanchor.stellar.org", "testnet");
+    expect(testnetResult.valid).toBe(true);
+    expect(testnetResult.targets).toHaveLength(1);
+    expect(testnetResult.targets[0].network).toBe("testnet");
+
+    const mainnetResult = validateOnDemandTarget(sampleRegistry, "dualanchor.stellar.org", "mainnet");
+    expect(mainnetResult.valid).toBe(true);
+    expect(mainnetResult.targets).toHaveLength(1);
+    expect(mainnetResult.targets[0].network).toBe("mainnet");
+  });
+
+  it("returns all enabled networks when network is not specified", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "dualanchor.stellar.org");
+    expect(result.valid).toBe(true);
+    expect(result.targets).toHaveLength(2);
+  });
+
+  it("rejects unregistered domain with clear reason", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "unregistered.com");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("not registered in registry/anchors.json");
+  });
+
+  it("rejects opted-out (disabled) domain with clear reason", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "optedout.stellar.org");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('disabled ("enabled": false)');
+  });
+
+  it("rejects empty or whitespace domain", () => {
+    expect(validateOnDemandTarget(sampleRegistry, "").valid).toBe(false);
+    expect(validateOnDemandTarget(sampleRegistry, "   ").valid).toBe(false);
+  });
+
+  it("allows re-check when no prior report exists in durable storage", async () => {
+    const testDir = join(tmpdir(), `test-rate-limit-${Date.now()}-empty`);
+    await mkdir(testDir, { recursive: true });
+    try {
+      const result = await checkRateLimit({
+        dataRoot: testDir,
+        domain: "testanchor.stellar.org",
+        network: "testnet",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.lastChecked).toBeNull();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks re-check when last run was within the 6-hour window and names next permitted time", async () => {
+    const testDir = join(tmpdir(), `test-rate-limit-${Date.now()}-blocked`);
+    const domain = "testanchor.stellar.org";
+    const network = "testnet";
+    const reportDir = join(testDir, "data", "reports", domain, network);
+    await mkdir(reportDir, { recursive: true });
+
+    // Stored report from 2 hours ago
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const twoHoursAgoIso = twoHoursAgo.toISOString().replace(/\.\d{3}Z$/, "Z");
+    const report = {
+      schemaVersion: 2,
+      domain,
+      network,
+      timestamp: twoHoursAgoIso,
+      results: [],
+    };
+    await writeFile(join(reportDir, "latest.json"), JSON.stringify(report));
+
+    try {
+      const result = await checkRateLimit({
+        dataRoot: testDir,
+        domain,
+        network,
+        now: new Date(),
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.lastChecked).toBe(twoHoursAgoIso);
+      expect(result.nextAllowed).toBeDefined();
+      expect(result.reason).toContain("Rate limit exceeded");
+      expect(result.reason).toContain(twoHoursAgoIso);
+      expect(result.reason).toContain("cooldown: 6 hours");
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("permits re-check when last run was older than 6 hours", async () => {
+    const testDir = join(tmpdir(), `test-rate-limit-${Date.now()}-allowed`);
+    const domain = "testanchor.stellar.org";
+    const network = "testnet";
+    const reportDir = join(testDir, "data", "reports", domain, network);
+    await mkdir(reportDir, { recursive: true });
+
+    // Stored report from 7 hours ago
+    const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    const sevenHoursAgoIso = sevenHoursAgo.toISOString().replace(/\.\d{3}Z$/, "Z");
+    const report = {
+      schemaVersion: 2,
+      domain,
+      network,
+      timestamp: sevenHoursAgoIso,
+      results: [],
+    };
+    await writeFile(join(reportDir, "latest.json"), JSON.stringify(report));
+
+    try {
+      const result = await checkRateLimit({
+        dataRoot: testDir,
+        domain,
+        network,
+        now: new Date(),
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.lastChecked).toBe(sevenHoursAgoIso);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+});
+

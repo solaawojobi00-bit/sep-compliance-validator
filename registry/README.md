@@ -108,6 +108,27 @@ reachability check: a domain that is already down is exactly when an operator ma
 To have historical results removed as well, say so in the pull request; that is a
 maintainer action, separate from the flag.
 
+## On-demand re-checks
+
+After deploying fixes or updates to your anchor, you do not need to wait 24 hours for the scheduled midnight UTC crawl to update your dashboard status.
+
+You can trigger an on-demand re-check via GitHub Actions:
+
+1. Navigate to the **Actions** tab and select the **Dashboard crawl** workflow.
+2. Click **Run workflow**, enter your anchor's `domain` (and optionally choose the `network`), then click **Run workflow**.
+
+Alternatively, trigger it via GitHub CLI:
+
+```bash
+gh workflow run dashboard-crawl.yml -f domain=anchor.example.com -f network=testnet
+```
+
+### Rate limiting & constraints
+
+- **Registry gate:** The domain must already be registered with `"enabled": true` in `registry/anchors.json`. Unregistered or disabled domains are rejected.
+- **6-hour cooldown:** Each registered domain/network may be re-checked on demand at most once every **6 hours**. Triggering earlier will fail with a message stating the exact time the next check is permitted.
+- **Storage & publication:** On-demand results are merged into the archive and `data/summary.json` using the same pipeline as scheduled crawls.
+
 ## Validating locally
 
 ```bash
@@ -117,3 +138,4 @@ npm run validate:registry
 Checks the committed registry against the schema and reports duplicates — the same
 offline gate CI runs. The logic lives in [`../scripts/registry-lib.mjs`](../scripts/registry-lib.mjs)
 and is unit tested in [`../test/registry.test.mjs`](../test/registry.test.mjs).
+
