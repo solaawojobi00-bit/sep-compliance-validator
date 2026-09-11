@@ -8,6 +8,7 @@
 // The 2020 build, not ajv's default export: the default only knows draft-07, and
 // registry/schema.json declares draft 2020-12 (which is what $defs belongs to).
 import Ajv from "ajv/dist/2020.js";
+import { Keypair } from "@stellar/stellar-sdk";
 
 /** Domains are case-insensitive, so the registry's key is the lowercased domain. */
 export function normalizeDomain(domain) {
@@ -92,3 +93,107 @@ export function changedEntries(before, after) {
 export function enabledEntries(registry) {
   return (Array.isArray(registry) ? registry : []).filter((entry) => entry?.enabled === true);
 }
+
+/**
+ * Canonical challenge payload string bound to the domain, network, and registration date.
+ */
+export function createProofMessage({ domain, network, addedAt }) {
+  return `stellar-anchor-registry:${normalizeDomain(domain)}:${network}:${addedAt}`;
+}
+
+/**
+ * Verifies an ed25519 signature over the UTF-8 challenge message against a public key.
+ */
+export function verifyProofSignature({ message, signingKey, signature }) {
+  if (
+    !message ||
+    typeof message !== "string" ||
+    !signingKey ||
+    typeof signingKey !== "string" ||
+    !signature ||
+    typeof signature !== "string"
+  ) {
+    return false;
+  }
+
+  try {
+    const keypair = Keypair.fromPublicKey(signingKey);
+    const msgBuf = Buffer.from(message, "utf-8");
+    const sigBuf = Buffer.from(signature, "base64");
+    if (sigBuf.length !== 64) {
+      return false;
+    }
+    return keypair.verify(msgBuf, sigBuf);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Evaluates anchor domain ownership based on stellar.toml SIGNING_KEY and the submitted proof.
+ *
+ * Returns an object with:
+ * - status: "verified" | "manual_review" | "missing_proof" | "mismatched_payload" | "key_mismatch" | "invalid_signature"
+ * - message: human-readable explanation
+ * - signingKey: string (if available)
+ */
+export function evaluateOwnershipProof({ entry, tomlSigningKey, proof }) {
+  if (!tomlSigningKey || typeof tomlSigningKey !== "string" || tomlSigningKey.trim() === "") {
+    return {
+      status: "manual_review",
+      message: "stellar.toml does not declare a SIGNING_KEY; falls back to maintainer review",
+    };
+  }
+
+  if (!proof) {
+    return {
+      status: "missing_proof",
+      signingKey: tomlSigningKey,
+      message: `stellar.toml declares SIGNING_KEY (${tomlSigningKey}), but no proof file was found in registry/proofs/`,
+    };
+  }
+
+  if (
+    normalizeDomain(proof.domain) !== normalizeDomain(entry?.domain) ||
+    proof.network !== entry?.network ||
+    proof.addedAt !== entry?.addedAt
+  ) {
+    return {
+      status: "mismatched_payload",
+      signingKey: tomlSigningKey,
+      message:
+        `proof payload mismatch: expected domain="${entry?.domain}", network="${entry?.network}", addedAt="${entry?.addedAt}"; ` +
+        `got domain="${proof.domain}", network="${proof.network}", addedAt="${proof.addedAt}"`,
+    };
+  }
+
+  if (proof.signingKey !== tomlSigningKey) {
+    return {
+      status: "key_mismatch",
+      signingKey: tomlSigningKey,
+      message: `proof signingKey (${proof.signingKey}) does not match SIGNING_KEY (${tomlSigningKey}) published in stellar.toml`,
+    };
+  }
+
+  const message = createProofMessage(entry);
+  const isValid = verifyProofSignature({
+    message,
+    signingKey: proof.signingKey,
+    signature: proof.signature,
+  });
+
+  if (!isValid) {
+    return {
+      status: "invalid_signature",
+      signingKey: tomlSigningKey,
+      message: `signature is invalid for SIGNING_KEY (${tomlSigningKey})`,
+    };
+  }
+
+  return {
+    status: "verified",
+    signingKey: tomlSigningKey,
+    message: `domain ownership verified with SIGNING_KEY (${tomlSigningKey})`,
+  };
+}
+

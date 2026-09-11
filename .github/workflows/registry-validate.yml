@@ -19,6 +19,7 @@ on:
       - "scripts/registry-lib.mjs"
       - "scripts/validate-registry.mjs"
       - "scripts/check-registry-domains.mjs"
+      - "scripts/sign-registry-proof.mjs"
       - ".github/workflows/registry-validate.yml"
   push:
     branches: [ "main" ]
@@ -92,5 +93,6 @@ jobs:
         git show "${BASE_SHA}:registry/anchors.json" > "${RUNNER_TEMP}/base-anchors.json" \
           || echo '[]' > "${RUNNER_TEMP}/base-anchors.json"
 
-    - name: Verify added domains serve a parseable stellar.toml
+    - name: Verify added domains serve a parseable stellar.toml and prove ownership
       run: node scripts/check-registry-domains.mjs "${RUNNER_TEMP}/base-anchors.json" registry/anchors.json
+
