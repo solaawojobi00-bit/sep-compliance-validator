@@ -17,6 +17,7 @@ name: Dashboard crawl
 on:
   schedule:
     # 00:00 UTC daily, per section 5.1.
+    - cron: "0 0 * * *"
   # Manual or on-demand trigger: supports validating all anchors or a single domain/network with 6-hour rate limiting.
   workflow_dispatch:
     inputs:
@@ -27,11 +28,7 @@ on:
       network:
         description: "Network of the anchor (optional: testnet or mainnet)"
         required: false
-        type: choice
-        options:
-          - ""
-          - testnet
-          - mainnet
+        type: string
 
 # Only the data branch is written, and only by the commit step below.
 permissions:
@@ -100,14 +97,14 @@ jobs:
         INPUT_NETWORK: ${{ inputs.network }}
       run: |
         set -euo pipefail
-        ARGS=""
+        ARGS=()
         if [ -n "${INPUT_DOMAIN}" ]; then
-          ARGS="$ARGS --domain ${INPUT_DOMAIN}"
+          ARGS+=(--domain "${INPUT_DOMAIN}")
         fi
         if [ -n "${INPUT_NETWORK}" ]; then
-          ARGS="$ARGS --network ${INPUT_NETWORK}"
+          ARGS+=(--network "${INPUT_NETWORK}")
         fi
-        node scripts/crawl/crawl.mjs --data-root data-store $ARGS
+        node scripts/crawl/crawl.mjs --data-root data-store "${ARGS[@]}"
 
     - name: Publish the archive
       env:
