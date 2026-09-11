@@ -110,3 +110,79 @@ export function formatRelativeTime(isoString, nowMs = Date.now()) {
   if (diffDays < 30) return `${diffDays}d ago`;
   return new Date(timestamp).toLocaleDateString();
 }
+
+/**
+ * Validates a Report object's structure and schemaVersion.
+ */
+export function validateReportSchema(report) {
+  if (!report || typeof report !== "object") {
+    return { valid: false, error: "Report is missing or not a valid JSON object." };
+  }
+
+  if (report.schemaVersion !== undefined && typeof report.schemaVersion === "number") {
+    // Current supported versions are 1 and 2
+    if (report.schemaVersion > 2) {
+      return {
+        valid: false,
+        error: `Report carries unsupported schemaVersion ${report.schemaVersion} (highest supported is 2). Please upgrade validator.`,
+      };
+    }
+  }
+
+  if (!report.domain || typeof report.domain !== "string") {
+    return { valid: false, error: "Report is missing 'domain' field." };
+  }
+
+  if (!Array.isArray(report.results)) {
+    return { valid: false, error: "Report is missing 'results' array." };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Extracts checks that are failing or producing warnings for top-level surfacing.
+ */
+export function getFailingChecks(results) {
+  const list = Array.isArray(results) ? results : [];
+  return list.filter((r) => r.status === "fail" || r.status === "warn");
+}
+
+/**
+ * Groups check results by SEP specification prefix.
+ */
+export function groupResultsBySep(results) {
+  const list = Array.isArray(results) ? results : [];
+
+  const groups = [
+    { key: "sep1", title: "SEP-1: Info Discovery (stellar.toml)", checks: [] },
+    { key: "sep10", title: "SEP-10: Stellar Web Authentication", checks: [] },
+    { key: "sep12", title: "SEP-12: KYC & Customer Identification", checks: [] },
+    { key: "sep24", title: "SEP-24: Interactive Deposit & Withdrawal", checks: [] },
+    { key: "sep38", title: "SEP-38: Anchor Quotes & Rates", checks: [] },
+    { key: "other", title: "Other Diagnostic Checks", checks: [] },
+  ];
+
+  const groupMap = new Map(groups.map((g) => [g.key, g]));
+
+  for (const check of list) {
+    const id = check.id || "";
+    if (id.startsWith("sep1.")) {
+      groupMap.get("sep1").checks.push(check);
+    } else if (id.startsWith("sep10.")) {
+      groupMap.get("sep10").checks.push(check);
+    } else if (id.startsWith("sep12.")) {
+      groupMap.get("sep12").checks.push(check);
+    } else if (id.startsWith("sep24.")) {
+      groupMap.get("sep24").checks.push(check);
+    } else if (id.startsWith("sep38.")) {
+      groupMap.get("sep38").checks.push(check);
+    } else {
+      groupMap.get("other").checks.push(check);
+    }
+  }
+
+  // Return non-empty groups
+  return groups.filter((g) => g.checks.length > 0);
+}
+
