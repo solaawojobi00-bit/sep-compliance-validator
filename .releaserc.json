@@ -4,7 +4,8 @@
     [
       "@semantic-release/commit-analyzer",
       {
-        "preset": "conventionalcommits"
+        "preset": "conventionalcommits",
+        "releaseRules": [{ "type": "deps", "release": "patch" }]
       }
     ],
     [
@@ -15,6 +16,7 @@
           "types": [
             { "type": "feat", "section": "Features" },
             { "type": "fix", "section": "Bug Fixes" },
+            { "type": "deps", "section": "Dependencies" },
             { "type": "perf", "section": "Performance Improvements" },
             { "type": "revert", "section": "Reverts" },
             { "type": "docs", "section": "Documentation" },
