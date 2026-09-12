@@ -52,10 +52,18 @@ npm install
   ```bash
   npm run test:watch
   ```
+- **Run tests under the coverage thresholds CI gates on**:
+  ```bash
+  npm run test:coverage
+  ```
 - **Lint** (typescript-eslint, bug-finding rules only — formatting is not linted):
   ```bash
   npm run lint
   ```
+  Linting is type-aware and covers `src/` and `test/` alike (`tsconfig.test.json` is the
+  only project that includes the test suite). `@typescript-eslint/no-explicit-any` is
+  enabled, so an explicit `any` anywhere — tests included — fails the build. Where a
+  value genuinely is not statically knowable, prefer `unknown` and narrow it.
 - **Type-check the test suite** (`tsconfig.json` excludes `test/`, so `npm run build`
   does not cover it):
   ```bash
@@ -257,16 +265,34 @@ describe("fetchStellarToml", () => {
 
 ### 5. Validate Build & Tests
 
-Before submitting your changes, run everything CI gates on:
+Before submitting your changes, run:
 
 ```bash
 npm run build
-npm test
+npm run test:coverage    # or `npm test` to skip the coverage gate
 npm run lint
 npm run typecheck
-npm run validate:registry
+npm run validate:registry # only needed if you changed registry/ or its tooling
 npm run lint:workflows   # only if you changed .github/workflows/
 ```
+
+Prefer `npm run test:coverage` over `npm test` before pushing. CI runs the plain suite on
+Node 24.x but the coverage gate on 22.x, and the thresholds in `vitest.config.ts` (85%
+lines, 85% statements, 82% branches, 100% functions, with `src/checks/**` held to 80%
+branches) are blocking. A new branch in a checker that nothing exercises is the usual way
+a green local `npm test` still comes back red — 100% function coverage in particular means
+a helper with no test at all will fail the build.
+
+CI gates on more than these scripts, none of which need running locally but all of which
+can fail a pull request: a blocking production dependency audit
+(`npm audit --omit=dev --audit-level=high`; the full-tree audit is advisory and never
+fails), an `npm pack` smoke test that installs the tarball into a clean project and runs
+the installed binary, two composite-Action smoke jobs covering the passing and the failing
+path, and CodeQL, Gitleaks, and dependency review.
+
+`npm run validate:registry` is deliberately not on the every-pull-request list: the
+workflow that runs it is path-filtered to `registry/**` and its scripts, so it only gates
+pull requests that actually touch the registry.
 
 `lint:workflows` runs [actionlint](https://github.com/rhysd/actionlint) over
 `.github/workflows/`. Unlike the others it is not an npm dependency, so install the
@@ -311,8 +337,10 @@ the registry, its schema, and `scripts/registry-*.mjs` are not shipped in the np
 
 1. Create a descriptive feature/fix branch: `git checkout -b <branch-name>`.
 2. Ensure your changes stay strictly within the scope of the issue you are addressing.
-3. Make sure `npm run build`, `npm test`, `npm run lint`, `npm run typecheck`, and
-   `npm run validate:registry` pass cleanly — these are the required CI checks.
+3. Make sure `npm run build`, `npm run test:coverage`, `npm run lint`, and
+   `npm run typecheck` pass cleanly, plus `npm run validate:registry` if you touched
+   `registry/`. See [Validate Build & Tests](#5-validate-build--tests) for the gates CI
+   applies on top of these.
 4. Open a pull request against `main` describing the changes made and linking to the relevant issue.
 
 Pull requests are also scanned for committed credentials by Gitleaks, and the check fails

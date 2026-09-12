@@ -6,25 +6,45 @@
  * run is recorded as `*.crawl_unavailable` markers inside the report rather than as
  * crawler-side state: `completeness` below is read back out of those markers.
  */
-import { isCrawlUnavailable, isNotVerified } from "./inconclusive-ids.mjs";
+import { isCrawlUnavailable } from "./crawl-markers.mjs";
+import { isNotVerifiedV1 } from "./legacy-v1-inconclusive.mjs";
 
 export const HISTORY_RETENTION_DAYS = 365;
+
+/**
+ * Whether one result is a warn that reports a limit of the run rather than a finding.
+ *
+ * From schemaVersion 2 this is read straight off the result: #124 put an explicit
+ * `exercised` field on every `warn`, so no inspection of free text is involved.
+ *
+ * v1 reports have no such field and are still inside the archive's retention window, so
+ * they are decoded with the frozen heuristic they were written under. Reading `exercised`
+ * off a v1 result would find `undefined` and count zero not-verified results for the
+ * dashboard's entire history.
+ */
+function isNotVerifiedIn(schemaVersion, result) {
+  if (schemaVersion >= 2) {
+    return result?.status === "warn" && result.exercised === false;
+  }
+  return isNotVerifiedV1(result);
+}
 
 /**
  * Counts by status, plus `notVerified` as a subset of `warn`.
  *
  * `notVerified` is not a fourth status - it counts the warnings that report a limit of
  * the validator rather than a finding about the anchor, so a consumer can say "8 warnings,
- * 7 of which we could not verify" instead of implying eight problems. See #124 for the
- * schema field that will replace the heuristic behind it.
+ * 7 of which we could not verify" instead of implying eight problems.
+ *
+ * `schemaVersion` selects how that subset is identified; see {@link isNotVerifiedIn}.
  */
-export function countResults(results) {
+export function countResults(results, schemaVersion = 1) {
   const list = Array.isArray(results) ? results : [];
   return {
     pass: list.filter((r) => r.status === "pass").length,
     fail: list.filter((r) => r.status === "fail").length,
     warn: list.filter((r) => r.status === "warn").length,
-    notVerified: list.filter((r) => isNotVerified(r)).length,
+    notVerified: list.filter((r) => isNotVerifiedIn(schemaVersion, r)).length,
     total: list.length,
   };
 }
@@ -96,7 +116,7 @@ export function buildEntry({ domain, network, reports, now, historyDays = HISTOR
     lastChecked: newest.timestamp,
     status: rollUpStatus(newest.results),
     completeness: completenessOf(newest.results),
-    summary: countResults(newest.results),
+    summary: countResults(newest.results, newest.schemaVersion ?? 1),
     history,
   };
 }

@@ -177,6 +177,7 @@ async function checkCorsHeader(
         id,
         description,
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Could not verify CORS: anchor returned HTTP ${res.status} for a request with Origin: ${CORS_PROBE_ORIGIN}`,
       });
@@ -186,6 +187,7 @@ async function checkCorsHeader(
       id,
       description,
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: `Could not verify CORS: ${(err as Error).message}`,
     });
@@ -252,6 +254,7 @@ export async function fetchStellarToml(
         id: "sep1.content_type",
         description: "stellar.toml is served with Content-Type: text/plain",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: contentType
           ? `Content-Type is "${contentType}", recommended is "text/plain"`
@@ -442,6 +445,7 @@ export function parseStellarToml(
           id: "sep1.network_passphrase",
           description: "stellar.toml declares NETWORK_PASSPHRASE",
           status: "warn",
+          exercised: true,
           severity: "warning",
           message:
             "NETWORK_PASSPHRASE not declared; assuming the target network's passphrase",
@@ -598,6 +602,7 @@ export function validateDocumentation(
       id: "sep1.doc",
       description: "[DOCUMENTATION] section format",
       status: "warn",
+      exercised: true,
       severity: "warning",
       message: `DOCUMENTATION must be a table, got ${typeof rawDoc}`,
     });
@@ -651,6 +656,7 @@ export function validateDocumentation(
         id: "sep1.doc.org_url",
         description: "ORG_URL must be a valid HTTPS URL",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `ORG_URL must be a string URL, got ${typeof doc.ORG_URL}`,
       });
@@ -662,6 +668,7 @@ export function validateDocumentation(
             id: "sep1.doc.org_url",
             description: "ORG_URL must use the https: scheme",
             status: "warn",
+            exercised: true,
             severity: "warning",
             message: `ORG_URL "${doc.ORG_URL}" must use the https: scheme`,
           });
@@ -677,6 +684,7 @@ export function validateDocumentation(
               id: "sep1.doc.org_url",
               description: "ORG_URL matches hosting domain",
               status: "warn",
+              exercised: true,
               severity: "warning",
               message: `ORG_URL host "${orgHost}" does not match hosting domain "${domain}"`,
             });
@@ -695,6 +703,7 @@ export function validateDocumentation(
           id: "sep1.doc.org_url",
           description: "ORG_URL must be a valid absolute HTTPS URL",
           status: "warn",
+          exercised: true,
           severity: "warning",
           message: `ORG_URL "${doc.ORG_URL}" is not a valid absolute URL`,
         });
@@ -714,6 +723,7 @@ export function validateDocumentation(
         id: "sep1.doc.org_official_email",
         description: "ORG_OFFICIAL_EMAIL format and domain",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `ORG_OFFICIAL_EMAIL "${String(doc.ORG_OFFICIAL_EMAIL)}" is not a well-formed email address`,
       });
@@ -730,6 +740,7 @@ export function validateDocumentation(
           id: "sep1.doc.org_official_email",
           description: "ORG_OFFICIAL_EMAIL format and domain",
           status: "warn",
+          exercised: true,
           severity: "warning",
           message: `ORG_OFFICIAL_EMAIL domain "${emailDomain}" does not match ORG_URL domain "${targetDomain}"`,
         });
@@ -765,6 +776,7 @@ export function validateDocumentation(
           id,
           description: `${key} HTTPS URL on ORG_URL domain`,
           status: "warn",
+          exercised: true,
           severity: "warning",
           message: `${key} must be a string URL, got ${typeof val}`,
         });
@@ -776,6 +788,7 @@ export function validateDocumentation(
               id,
               description: `${key} HTTPS URL on ORG_URL domain`,
               status: "warn",
+              exercised: true,
               severity: "warning",
               message: `${key} "${val}" must use the https: scheme`,
             });
@@ -791,6 +804,7 @@ export function validateDocumentation(
                 id,
                 description: `${key} HTTPS URL on ORG_URL domain`,
                 status: "warn",
+                exercised: true,
                 severity: "warning",
                 message: `${key} host "${host}" is not on the ORG_URL domain "${targetDomain}"`,
               });
@@ -809,6 +823,7 @@ export function validateDocumentation(
             id,
             description: `${key} HTTPS URL on ORG_URL domain`,
             status: "warn",
+            exercised: true,
             severity: "warning",
             message: `${key} "${val}" is not a valid absolute URL`,
           });
@@ -828,6 +843,7 @@ export function validateDocumentation(
         id: "sep1.doc.org_phone_number",
         description: "ORG_PHONE_NUMBER E.164 format",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `ORG_PHONE_NUMBER "${String(doc.ORG_PHONE_NUMBER)}" must be in E.164 format (e.g. +14155552671)`,
       });
@@ -849,6 +865,7 @@ export function validateDocumentation(
         id: "sep1.doc.org_logo",
         description: "ORG_LOGO HTTPS URL",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `ORG_LOGO must be a string URL, got ${typeof doc.ORG_LOGO}`,
       });
@@ -860,6 +877,7 @@ export function validateDocumentation(
             id: "sep1.doc.org_logo",
             description: "ORG_LOGO HTTPS URL",
             status: "warn",
+            exercised: true,
             severity: "warning",
             message: `ORG_LOGO "${doc.ORG_LOGO}" must use the https: scheme`,
           });
@@ -877,6 +895,7 @@ export function validateDocumentation(
           id: "sep1.doc.org_logo",
           description: "ORG_LOGO HTTPS URL",
           status: "warn",
+          exercised: true,
           severity: "warning",
           message: `ORG_LOGO "${doc.ORG_LOGO}" is not a valid absolute URL`,
         });
@@ -894,6 +913,7 @@ export function validateDocumentation(
         id: "sep1.doc.org_support_email",
         description: "ORG_SUPPORT_EMAIL format",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `ORG_SUPPORT_EMAIL "${String(doc.ORG_SUPPORT_EMAIL)}" is not a valid email address`,
       });

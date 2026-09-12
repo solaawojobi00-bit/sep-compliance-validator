@@ -117,6 +117,89 @@ describe("runCheckAction in-process branch coverage", () => {
     expect(report?.network).toBe("mainnet");
   });
 
+  /**
+   * Serves a SEP-1 conformant stellar.toml, but refuses the cross-origin CORS probe so
+   * that check cannot reach a verdict. The result is a run with zero failures whose only
+   * warning is one the validator could not exercise.
+   */
+  function mockConformantAnchorWithRefusedCorsProbe() {
+    global.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString();
+      if (!url.includes(".well-known/stellar.toml")) {
+        return new Response("Not Found", { status: 404 });
+      }
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (headers?.Origin) {
+        // A refused probe, not a missing header: the anchor may simply allowlist origins.
+        return new Response("", { status: 503, headers: { vary: "Origin" } });
+      }
+      return new Response(
+        'VERSION="2.0.0"\n' +
+          'NETWORK_PASSPHRASE="Test SDF Network ; September 2015"\n' +
+          'SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n' +
+          'WEB_AUTH_ENDPOINT="https://example.com/auth"\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/plain", "access-control-allow-origin": "*" },
+        },
+      );
+    }) as unknown as typeof fetch;
+  }
+
+  it("does not fail the build under --fail-on-warn for a not-exercised result", async () => {
+    mockConformantAnchorWithRefusedCorsProbe();
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      only: "sep1",
+      failOnWarn: true,
+    });
+
+    const warns = report?.results.filter((r) => r.status === "warn") ?? [];
+    expect(warns.length).toBeGreaterThan(0);
+    // Precondition for what this test is actually about: nothing failed, and every warning
+    // is one the run could not exercise.
+    expect(report?.results.some((r) => r.status === "fail")).toBe(false);
+    expect(warns.every((r) => r.exercised === false)).toBe(true);
+
+    // #124: failing a build here would fail it for a condition the validator never
+    // checked and the operator cannot act on. This is a deliberate behaviour change —
+    // under schemaVersion 1 every warn tripped --fail-on-warn.
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("still fails the build under --fail-on-warn for an advisory result", async () => {
+    // Same anchor, but the CORS probe succeeds and NETWORK_PASSPHRASE is absent, which is
+    // an observation about the anchor rather than a limit of the run.
+    global.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (!url.includes(".well-known/stellar.toml")) {
+        return new Response("Not Found", { status: 404 });
+      }
+      return new Response(
+        'VERSION="2.0.0"\n' +
+          'SIGNING_KEY="GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7"\n' +
+          'WEB_AUTH_ENDPOINT="https://example.com/auth"\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/plain", "access-control-allow-origin": "*" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    const report = await runCheckAction("example.com", {
+      ...baseOpts,
+      only: "sep1",
+      failOnWarn: true,
+    });
+
+    const advisoryWarns =
+      report?.results.filter((r) => r.status === "warn" && r.exercised === true) ?? [];
+    expect(advisoryWarns.length).toBeGreaterThan(0);
+    expect(report?.results.some((r) => r.status === "fail")).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
   it("exercises --client-domain toml fetch path", async () => {
     global.fetch = vi.fn(async (input: string | URL | Request) => {
       const url = input.toString();

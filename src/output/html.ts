@@ -1,5 +1,5 @@
 import type { Report } from "../core/report.js";
-import { summarize } from "../core/report.js";
+import { isNotExercised, summarize } from "../core/report.js";
 
 function escapeHtml(str: string): string {
   return str
@@ -11,13 +11,17 @@ function escapeHtml(str: string): string {
 }
 
 export function renderHtml(report: Report): string {
-  const { pass, fail, warn, total } = summarize(report);
+  const { pass, fail, advisory, notExercised, total } = summarize(report);
 
   const rows = report.results
     .map((r) => {
-      const statusClass = `status-${r.status}`;
+      // A not-exercised warn is not a finding, so it does not get the warn badge: see the
+      // SKIP rationale in output/table.ts.
+      const skipped = isNotExercised(r);
+      const statusClass = skipped ? "status-skip" : `status-${r.status}`;
+      const label = skipped ? "SKIP" : r.status.toUpperCase();
       return `        <tr>
-          <td><span class="badge ${statusClass}">${escapeHtml(r.status.toUpperCase())}</span></td>
+          <td><span class="badge ${statusClass}">${escapeHtml(label)}</span></td>
           <td><strong>${escapeHtml(r.id)}</strong><br/><span class="desc">${escapeHtml(r.description)}</span></td>
           <td>${escapeHtml(r.severity)}</td>
           <td>${escapeHtml(r.message)}</td>
@@ -87,6 +91,7 @@ export function renderHtml(report: Report): string {
     .card.pass .value { color: #3fb950; }
     .card.fail .value { color: #f85149; }
     .card.warn .value { color: #e3b341; }
+    .card.skip .value { color: #8b949e; }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -121,6 +126,7 @@ export function renderHtml(report: Report): string {
     .status-pass { background-color: rgba(35, 134, 54, 0.2); color: #3fb950; border: 1px solid #238636; }
     .status-fail { background-color: rgba(218, 54, 51, 0.2); color: #f85149; border: 1px solid #da3633; }
     .status-warn { background-color: rgba(210, 153, 34, 0.2); color: #e3b341; border: 1px solid #d29922; }
+    .status-skip { background-color: rgba(139, 148, 158, 0.2); color: #8b949e; border: 1px solid #6e7681; }
     .desc {
       color: var(--text-muted);
       font-size: 0.82rem;
@@ -154,7 +160,11 @@ export function renderHtml(report: Report): string {
       </div>
       <div class="card warn">
         <div>Warnings</div>
-        <div class="value">${warn}</div>
+        <div class="value">${advisory}</div>
+      </div>
+      <div class="card skip">
+        <div>Not Exercised</div>
+        <div class="value">${notExercised}</div>
       </div>
     </div>
 

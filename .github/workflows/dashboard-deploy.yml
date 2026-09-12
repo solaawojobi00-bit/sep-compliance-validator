@@ -1,0 +1,70 @@
+name: Deploy Dashboard
+
+# Builds and deploys the static dashboard app to GitHub Pages, combining the dashboard
+# web assets with the latest report data from the dashboard-data branch.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "dashboard/**"
+      - ".github/workflows/dashboard-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check out published data branch
+        id: data-branch
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          ref: dashboard-data
+          path: site-data
+          fetch-depth: 1
+
+      - name: Assemble static site
+        run: |
+          set -euo pipefail
+          mkdir -p dist-site
+          cp -r dashboard/* dist-site/
+
+          # If the dashboard-data branch exists and has reports, copy data/ over
+          if [ -d "site-data/data" ]; then
+            echo "Copying crawled data into site..."
+            mkdir -p dist-site/data
+            cp -r site-data/data/* dist-site/data/
+          else
+            echo "Using fallback data from dashboard/data..."
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

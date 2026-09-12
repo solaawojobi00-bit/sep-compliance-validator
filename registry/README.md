@@ -53,17 +53,47 @@ maintainer to re-run the job.
 
 ### Proving the domain is yours
 
-The automated `stellar.toml` check above proves the domain *works*, not that it is
-*yours*. Registration is therefore also gated on human review: a maintainer confirms the
-pull request comes from someone who controls the domain — typically by the PR being
-authored from the anchor's own organisation, or by correspondence with the `contact`
-address.
+The automated `stellar.toml` check confirms your endpoint parses and extracts your published `SIGNING_KEY`.
 
-Stronger, automated proof — a signed SEP-10 challenge using the anchor's published
-`SIGNING_KEY` — is tracked separately and is not yet implemented. Note that this registry
-deliberately does **not** ask you to add a non-standard key such as
-`[VALIDATOR] PUBLIC_DASHBOARD` to your `stellar.toml`: that field appears nowhere in
-SEP-1, and one tool should not ask the ecosystem to carry a bespoke field on its behalf.
+To prove that you control the domain, you must sign a canonical registration challenge using the private key corresponding to the `SIGNING_KEY` declared in your `stellar.toml`.
+
+#### Generating the proof
+
+Run the helper script with your domain, network, `addedAt` timestamp, and secret key:
+
+```bash
+node scripts/sign-registry-proof.mjs <domain> <network> <addedAt> <SECRET_KEY> --out registry/proofs/<domain>.<network>.json
+```
+
+For example:
+
+```bash
+node scripts/sign-registry-proof.mjs anchor.example.com testnet 2026-09-04T00:00:00Z SXXX... --out registry/proofs/anchor.example.com.testnet.json
+```
+
+Or provide `STELLAR_SECRET_KEY` in your environment:
+
+```bash
+STELLAR_SECRET_KEY=SXXX... node scripts/sign-registry-proof.mjs anchor.example.com testnet 2026-09-04T00:00:00Z --out registry/proofs/anchor.example.com.testnet.json
+```
+
+The resulting file in `registry/proofs/<domain>.<network>.json` contains:
+
+```json
+{
+  "domain": "anchor.example.com",
+  "network": "testnet",
+  "addedAt": "2026-09-04T00:00:00Z",
+  "signingKey": "GXXX...",
+  "signature": "..."
+}
+```
+
+Commit this proof file alongside your change to `registry/anchors.json`. CI will verify the signature against the live `SIGNING_KEY` fetched from your `stellar.toml`.
+
+#### Anchors without a `SIGNING_KEY`
+
+If your `stellar.toml` does not declare a `SIGNING_KEY` (which SEP-1 allows as optional), automated signature verification is skipped and the registration falls back to maintainer review. Note that this registry deliberately does **not** ask you to add non-standard keys such as `[VALIDATOR] PUBLIC_DASHBOARD`.
 
 ## Opting out
 
@@ -78,6 +108,27 @@ reachability check: a domain that is already down is exactly when an operator ma
 To have historical results removed as well, say so in the pull request; that is a
 maintainer action, separate from the flag.
 
+## On-demand re-checks
+
+After deploying fixes or updates to your anchor, you do not need to wait 24 hours for the scheduled midnight UTC crawl to update your dashboard status.
+
+You can trigger an on-demand re-check via GitHub Actions:
+
+1. Navigate to the **Actions** tab and select the **Dashboard crawl** workflow.
+2. Click **Run workflow**, enter your anchor's `domain` (and optionally choose the `network`), then click **Run workflow**.
+
+Alternatively, trigger it via GitHub CLI:
+
+```bash
+gh workflow run dashboard-crawl.yml -f domain=anchor.example.com -f network=testnet
+```
+
+### Rate limiting & constraints
+
+- **Registry gate:** The domain must already be registered with `"enabled": true` in `registry/anchors.json`. Unregistered or disabled domains are rejected.
+- **6-hour cooldown:** Each registered domain/network may be re-checked on demand at most once every **6 hours**. Triggering earlier will fail with a message stating the exact time the next check is permitted.
+- **Storage & publication:** On-demand results are merged into the archive and `data/summary.json` using the same pipeline as scheduled crawls.
+
 ## Validating locally
 
 ```bash
@@ -87,3 +138,4 @@ npm run validate:registry
 Checks the committed registry against the schema and reports duplicates — the same
 offline gate CI runs. The logic lives in [`../scripts/registry-lib.mjs`](../scripts/registry-lib.mjs)
 and is unit tested in [`../test/registry.test.mjs`](../test/registry.test.mjs).
+

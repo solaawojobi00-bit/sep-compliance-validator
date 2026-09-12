@@ -663,6 +663,8 @@ describe("runSep10Checks", () => {
 
     expect(sigCheck?.status).toBe("warn");
     expect(sigCheck?.message).toContain("no JWKS endpoint declared");
+    // There was no key to verify against, so the signature was never checked.
+    expect(sigCheck?.exercised).toBe(false);
   });
 
   it("fails fast when challenge request exceeds configured timeoutMs", async () => {

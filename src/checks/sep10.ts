@@ -58,6 +58,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       id: "sep10.skipped",
       description: "Run SEP-10 challenge/response flow",
       status: "warn",
+      exercised: false,
       severity: "error",
       message: "Skipped: WEB_AUTH_ENDPOINT or SIGNING_KEY missing from stellar.toml",
     });
@@ -69,6 +70,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       id: "sep10.skipped",
       description: "Run SEP-10 challenge/response flow",
       status: "warn",
+      exercised: false,
       severity: "error",
       message: `Skipped: stellar.toml NETWORK_PASSPHRASE ("${toml.networkPassphrase}") does not match target network passphrase ("${networkPassphrase}")`,
     });
@@ -83,6 +85,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       id: "sep10.skipped",
       description: "Run SEP-10 challenge/response flow",
       status: "warn",
+      exercised: false,
       severity: "error",
       message: `Skipped: SIGNING_KEY "${signingKey}" is not a valid Stellar ed25519 public key`,
     });
@@ -232,6 +235,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
         description:
           "Challenge nonce is 64-character base64 string decoding to 48 bytes",
         status: "warn",
+        exercised: true,
         severity: "warning",
         message: `Challenge nonce decodes to low-entropy data (${uniqueBytes} unique bytes, all-ASCII: ${isAllPrintableAscii})`,
       });
@@ -272,6 +276,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
         id: "sep10.challenge_nonce_unique",
         description: "Challenge nonce is unique across separate requests",
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Could not verify nonce uniqueness: second challenge request returned HTTP ${secondRes.status}`,
       });
@@ -282,6 +287,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
           id: "sep10.challenge_nonce_unique",
           description: "Challenge nonce is unique across separate requests",
           status: "warn",
+          exercised: false,
           severity: "warning",
           message:
             "Could not verify nonce uniqueness: second challenge response missing transaction field",
@@ -324,6 +330,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
       id: "sep10.challenge_nonce_unique",
       description: "Challenge nonce is unique across separate requests",
       status: "warn",
+      exercised: false,
       severity: "warning",
       message: `Could not verify nonce uniqueness: second challenge request failed (${(err as Error).message})`,
     });
@@ -395,6 +402,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
         description:
           "Server rejects challenge request combining memo with muxed (M...) account",
         status: "warn",
+        exercised: false,
         severity: "warning",
         message: `Could not verify memo/muxed conflict rejection: ${(err as Error).message}`,
       });
@@ -863,6 +871,7 @@ export async function runSep10Checks(opts: Sep10Options): Promise<Sep10Result> {
         id: "sep10.jwt_signature",
         description: "Verify JWT cryptographic signature via anchor JWKS",
         status: "warn",
+        exercised: false,
         severity: "warning",
         message:
           "Skipped: no JWKS endpoint declared in stellar.toml or discovered at /.well-known/jwks.json",

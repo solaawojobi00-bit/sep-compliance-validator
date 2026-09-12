@@ -22,9 +22,20 @@ import {
   rollUpStatus,
 } from "../scripts/crawl/aggregate-summary.mjs";
 import { classifyDetailFiles, DETAIL_RETENTION_DAYS } from "../scripts/crawl/prune-retention.mjs";
-import { isCrawlUnavailable, isNotVerified } from "../scripts/crawl/inconclusive-ids.mjs";
+import { isCrawlUnavailable } from "../scripts/crawl/crawl-markers.mjs";
+import { isNotVerifiedV1 } from "../scripts/crawl/legacy-v1-inconclusive.mjs";
 import { fileStamp, latestPath, parseFileStamp, reportPath } from "../scripts/crawl/storage-paths.mjs";
 import { looksTransient } from "../scripts/crawl/run-anchor.mjs";
+import {
+  checkRateLimit,
+  getLatestReportTimestamp,
+  RATE_LIMIT_HOURS,
+  RATE_LIMIT_MS,
+  validateOnDemandTarget,
+} from "../scripts/crawl/rate-limit.mjs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const core = legById("core");
 const kyc = legById("kyc");
@@ -38,6 +49,12 @@ const check = (id, status = "pass", message = "ok") => ({
   status,
   severity: status === "fail" ? "error" : status === "warn" ? "warning" : "error",
   message,
+});
+
+/** A schemaVersion 2 warn, which states its verdict explicitly rather than in prose. */
+const warnV2 = (id, exercised, message = "ok") => ({
+  ...check(id, "warn", message),
+  exercised,
 });
 
 describe("build-cli-args: the two flag conditions", () => {
@@ -377,13 +394,13 @@ describe("aggregate-summary: warn and fail stay distinct", () => {
     expect(rollUpStatus([])).toBe("warn");
   });
 
-  it("counts the two SEP-10 negative cases as not verified, not as problems", () => {
+  it("counts the two SEP-10 negative cases as not verified, not as problems (v1 archive)", () => {
     const results = [
       check("sep10.negative.expired", "warn", 'Anchor rejected expired challenge with HTTP 400, but ... expiry was NOT verified by this run.'),
       check("sep10.negative.wrong_network", "warn", "Anchor rejected wrong-network challenge ... NOT verified by this run."),
       check("sep12.fields.unknown_name", "warn", '"photo_proof_of_income" is not a standard SEP-9 field'),
     ];
-    const counts = countResults(results);
+    const counts = countResults(results, 1);
     expect(counts.warn).toBe(3);
     expect(counts.notVerified).toBe(2);
     expect(counts.fail).toBe(0);
@@ -391,26 +408,52 @@ describe("aggregate-summary: warn and fail stay distinct", () => {
     expect(counts.warn - counts.notVerified).toBe(1);
   });
 
-  it("recognises every not-exercised phrasing the checkers use", () => {
+  it("reads the exercised field on a v2 report instead of the message text", () => {
+    // Deliberately adversarial wording: the advisory result opens with "Skipped:" and the
+    // not-exercised one reads like a finding. A v2 report must be classified by its field,
+    // so prose can never sway the count again.
+    const results = [
+      warnV2("sep12.fields.unknown_name", true, "Skipped: this wording would fool the v1 heuristic"),
+      warnV2("sep10.jwt_signature", false, "no JWKS endpoint declared"),
+    ];
+    const counts = countResults(results, 2);
+    expect(counts.warn).toBe(2);
+    expect(counts.notVerified).toBe(1);
+    expect(counts.warn - counts.notVerified).toBe(1);
+  });
+
+  it("does not fall back to the v1 heuristic for a v2 report", () => {
+    // A v2 warn that omitted the field would be a producer bug. It must not be silently
+    // reclassified by prose; it counts as advisory, the conservative reading.
+    const counts = countResults([check("x.y", "warn", "Skipped: no field set")], 2);
+    expect(counts.notVerified).toBe(0);
+  });
+
+  it("recognises every not-exercised phrasing the v1 checkers used", () => {
     for (const message of [
       "Skipped: --no-write mode enabled; mutating PUT /customer request omitted",
       "Not exercised: the anchor did not flag any provided_field as VERIFICATION_REQUIRED",
       "Inconclusive: none of the 2 record(s) carry asset_code",
       "... so challenge expiry was NOT verified by this run",
     ]) {
-      expect(isNotVerified(check("x.y", "warn", message)), message).toBe(true);
+      expect(isNotVerifiedV1(check("x.y", "warn", message)), message).toBe(true);
     }
   });
 
   it("never treats a pass or a fail as not verified", () => {
-    expect(isNotVerified(check("sep10.negative.expired", "fail", "AUTHENTICATION BYPASS"))).toBe(false);
-    expect(isNotVerified(check("sep10.jwt_signature", "pass", "verified"))).toBe(false);
+    expect(isNotVerifiedV1(check("sep10.negative.expired", "fail", "AUTHENTICATION BYPASS"))).toBe(false);
+    expect(isNotVerifiedV1(check("sep10.jwt_signature", "pass", "verified"))).toBe(false);
+    expect(countResults([check("a", "fail"), check("b", "pass")], 2).notVerified).toBe(0);
   });
 
-  it("treats crawl_unavailable markers as not verified", () => {
+  it("treats crawl_unavailable markers as not verified under both schema versions", () => {
     const marker = unavailableMarkers(kyc, "timeout")[0];
     expect(isCrawlUnavailable(marker)).toBe(true);
-    expect(isNotVerified(marker)).toBe(true);
+    expect(isNotVerifiedV1(marker)).toBe(true);
+    // The marker now carries the field, so v2 classification reaches the same verdict
+    // without consulting its id or message.
+    expect(marker.exercised).toBe(false);
+    expect(countResults([marker], 2).notVerified).toBe(1);
   });
 });
 
@@ -570,3 +613,142 @@ describe("run-anchor: transient detection drives the one retry", () => {
     ).toBe(false);
   });
 });
+
+describe("rate-limit: registry targets & durable cooldown", () => {
+  const sampleRegistry = [
+    { domain: "testanchor.stellar.org", network: "testnet", enabled: true },
+    { domain: "mainnetanchor.stellar.org", network: "mainnet", enabled: true },
+    { domain: "dualanchor.stellar.org", network: "testnet", enabled: true },
+    { domain: "dualanchor.stellar.org", network: "mainnet", enabled: true },
+    { domain: "optedout.stellar.org", network: "testnet", enabled: false },
+  ];
+
+  it("validates registered and enabled domain", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "testanchor.stellar.org");
+    expect(result.valid).toBe(true);
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0].domain).toBe("testanchor.stellar.org");
+  });
+
+  it("filters by network when provided", () => {
+    const testnetResult = validateOnDemandTarget(sampleRegistry, "dualanchor.stellar.org", "testnet");
+    expect(testnetResult.valid).toBe(true);
+    expect(testnetResult.targets).toHaveLength(1);
+    expect(testnetResult.targets[0].network).toBe("testnet");
+
+    const mainnetResult = validateOnDemandTarget(sampleRegistry, "dualanchor.stellar.org", "mainnet");
+    expect(mainnetResult.valid).toBe(true);
+    expect(mainnetResult.targets).toHaveLength(1);
+    expect(mainnetResult.targets[0].network).toBe("mainnet");
+  });
+
+  it("returns all enabled networks when network is not specified", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "dualanchor.stellar.org");
+    expect(result.valid).toBe(true);
+    expect(result.targets).toHaveLength(2);
+  });
+
+  it("rejects unregistered domain with clear reason", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "unregistered.com");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("not registered in registry/anchors.json");
+  });
+
+  it("rejects opted-out (disabled) domain with clear reason", () => {
+    const result = validateOnDemandTarget(sampleRegistry, "optedout.stellar.org");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('disabled ("enabled": false)');
+  });
+
+  it("rejects empty or whitespace domain", () => {
+    expect(validateOnDemandTarget(sampleRegistry, "").valid).toBe(false);
+    expect(validateOnDemandTarget(sampleRegistry, "   ").valid).toBe(false);
+  });
+
+  it("allows re-check when no prior report exists in durable storage", async () => {
+    const testDir = join(tmpdir(), `test-rate-limit-${Date.now()}-empty`);
+    await mkdir(testDir, { recursive: true });
+    try {
+      const result = await checkRateLimit({
+        dataRoot: testDir,
+        domain: "testanchor.stellar.org",
+        network: "testnet",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.lastChecked).toBeNull();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks re-check when last run was within the 6-hour window and names next permitted time", async () => {
+    const testDir = join(tmpdir(), `test-rate-limit-${Date.now()}-blocked`);
+    const domain = "testanchor.stellar.org";
+    const network = "testnet";
+    const reportDir = join(testDir, "data", "reports", domain, network);
+    await mkdir(reportDir, { recursive: true });
+
+    // Stored report from 2 hours ago
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const twoHoursAgoIso = twoHoursAgo.toISOString().replace(/\.\d{3}Z$/, "Z");
+    const report = {
+      schemaVersion: 2,
+      domain,
+      network,
+      timestamp: twoHoursAgoIso,
+      results: [],
+    };
+    await writeFile(join(reportDir, "latest.json"), JSON.stringify(report));
+
+    try {
+      const result = await checkRateLimit({
+        dataRoot: testDir,
+        domain,
+        network,
+        now: new Date(),
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.lastChecked).toBe(twoHoursAgoIso);
+      expect(result.nextAllowed).toBeDefined();
+      expect(result.reason).toContain("Rate limit exceeded");
+      expect(result.reason).toContain(twoHoursAgoIso);
+      expect(result.reason).toContain("cooldown: 6 hours");
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("permits re-check when last run was older than 6 hours", async () => {
+    const testDir = join(tmpdir(), `test-rate-limit-${Date.now()}-allowed`);
+    const domain = "testanchor.stellar.org";
+    const network = "testnet";
+    const reportDir = join(testDir, "data", "reports", domain, network);
+    await mkdir(reportDir, { recursive: true });
+
+    // Stored report from 7 hours ago
+    const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    const sevenHoursAgoIso = sevenHoursAgo.toISOString().replace(/\.\d{3}Z$/, "Z");
+    const report = {
+      schemaVersion: 2,
+      domain,
+      network,
+      timestamp: sevenHoursAgoIso,
+      results: [],
+    };
+    await writeFile(join(reportDir, "latest.json"), JSON.stringify(report));
+
+    try {
+      const result = await checkRateLimit({
+        dataRoot: testDir,
+        domain,
+        network,
+        now: new Date(),
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.lastChecked).toBe(sevenHoursAgoIso);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+});
+

@@ -64,7 +64,7 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 - `-f, --format <table|json|html>`: Output format (default: `table`).
 - `-o, --output <file>`: Write rendered report to a file instead of stdout.
 - `--only <seps>`: Comma-separated list of SEPs to validate (e.g. `sep1,sep10`).
-- `--fail-on-warn`: Exit with status 1 if any check generates a warning.
+- `--fail-on-warn`: Exit with status 1 if any check generates an *advisory* warning. Warnings that report a check the validator could not exercise (rendered `SKIP`) do not fail the build, because they say nothing about your anchor.
 - `-v, --verbose`: Print detailed HTTP request and response diagnostics to stderr.
 - `--client-domain <domain>`: Client domain to exercise SEP-10 `client_domain` verification.
 - `-t, --timeout <ms>`: Request timeout in milliseconds (default: `10000`).
@@ -79,8 +79,8 @@ node dist/cli.js check <domain> [--network testnet|mainnet] [--format table|json
 
 ### Exit Codes
 
-- `0`: All checks passed (or warnings produced when `--fail-on-warn` is omitted).
-- `1`: One or more checks failed (or produced warnings when `--fail-on-warn` is active).
+- `0`: All checks passed (or warnings produced when `--fail-on-warn` is omitted, or only not-exercised warnings when it is active).
+- `1`: One or more checks failed (or produced advisory warnings when `--fail-on-warn` is active).
 - `2`: CLI usage / argument validation error.
 
 ### Example
@@ -90,15 +90,37 @@ npx sep-compliance-validator check testanchor.stellar.org --network testnet
 ```
 
 Runs against [Stellar's official testnet reference anchor](https://testanchor.stellar.org)
-and prints a pass/fail table for every check, e.g.:
+and prints a pass/fail table for every check, ending in a summary line. Adding `--no-write`
+to keep that run read-only, the report currently ends:
 
 ```
 SEP Compliance Report for testanchor.stellar.org (testnet)
 ...
-12/12 passed, 0 failed, 0 warnings
+60/75 passed, 0 failed, 15 warnings
 ```
 
-The process exits non-zero if any check fails, so it can be used as a CI gate.
+The exact counts move as the anchor changes and as checks are added — treat them as a
+sample, not a target. Without `--no-write` the run also exercises SEP-12's write path,
+which creates a synthetic test customer and deletes it again.
+
+The process exits non-zero if any check fails, so it can be used as a CI gate. Warnings
+alone do not fail the run unless `--fail-on-warn` is passed.
+
+#### Reading `WARN` vs `SKIP`
+
+A check that could not be exercised is reported as `SKIP`, not `WARN`, and counted
+separately:
+
+```
+69/77 passed, 0 failed, 1 warnings, 7 not exercised
+```
+
+`SKIP` means the condition under test was never reached — no optional endpoint was
+declared, `--no-write` suppressed a mutating request, or the anchor rejected a probe before
+the condition mattered. It reports a limit of the run, not a problem with your anchor, and
+there is nothing to fix. `WARN` is a real, if minor, finding. The example above is a fully
+conformant anchor: seven of its eight warnings are the validator describing its own
+coverage.
 
 ## GitHub Action for Anchor CI Pipelines
 
@@ -114,7 +136,7 @@ You can use this validator directly as a GitHub Action in your anchor repository
 | `timeout` | Request timeout in milliseconds | `10000` |
 | `client-domain` | Client domain for SEP-10 verification | — |
 | `confirm-mainnet` | Set to `true` to confirm testing against production anchor on mainnet | `false` |
-| `fail-on-warn` | Set to `true` to treat warning checks as failures | `false` |
+| `fail-on-warn` | Set to `true` to treat advisory warning checks as failures | `false` |
 | `only` | Comma-separated list of SEPs to validate (e.g. `sep1,sep10`) | — |
 | `interactive-browser`| Run headless browser checks against SEP-24 interactive URL | `false` |
 | `no-write` | Set to `true` to disable state-mutating requests (e.g. SEP-12 `PUT /customer`) | `false` |
@@ -126,7 +148,9 @@ You can use this validator directly as a GitHub Action in your anchor repository
 |---|---|
 | `pass` | Number of passed checks |
 | `fail` | Number of failed checks |
-| `warn` | Number of warning checks |
+| `warn` | Number of warning checks, of both kinds |
+| `advisory` | Number of warnings that found something advisory about the anchor |
+| `not-exercised` | Number of warnings for checks that never reached a verdict |
 | `total` | Total number of checks executed |
 | `report-path` | File path to the generated JSON compliance report |
 | `exit-code` | Validator CLI exit code: `0` all checks passed, `1` one or more checks failed, `2` the invocation was rejected. Lets a pipeline tell "this anchor is non-conformant" apart from "the validator was called wrong" |
@@ -182,12 +206,21 @@ Participation in this project is governed by the [Code of Conduct](./CODE_OF_CON
 ```bash
 npm run build            # compile TypeScript to dist/ (run first — some tests spawn dist/cli.js)
 npm test                 # run the test suite (vitest)
-npm run lint             # eslint, bug-finding rules only
+npm run test:coverage    # the same suite under the coverage thresholds CI gates on
+npm run lint             # eslint, bug-finding rules only (an `any` fails the build)
 npm run typecheck        # type-check the test suite (tsconfig.json excludes test/)
 npm run validate:registry # check registry/anchors.json against its schema
 ```
 
-These five are the gates CI enforces on every pull request.
+Everything above except `npm run validate:registry` runs on every pull request. The
+registry check is path-filtered to `registry/` and its tooling, so a normal change never
+waits on it — but run it locally before you edit the registry.
+
+CI enforces more than these scripts: `actionlint` over the workflow files, a blocking
+production dependency audit (`npm audit --omit=dev --audit-level=high`), an `npm pack`
+smoke test that installs the tarball into a clean project, two composite-Action smoke jobs
+covering the passing and the failing path, plus CodeQL, Gitleaks, and dependency review.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for what to run before pushing.
 
 ### Getting your anchor onto the public dashboard
 

@@ -728,6 +728,7 @@ describe("runSep12Checks", () => {
       const schema = byId(results, "sep12.verification_response_schema");
       expect(schema?.status).toBe("warn");
       expect(schema?.message).toContain("cannot be known");
+      expect(schema?.exercised).toBe(false);
 
       // The code is submitted as <field>_verification alongside the customer id.
       const verifyCall = fetchMock.mock.calls.find(

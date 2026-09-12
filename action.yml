@@ -56,8 +56,18 @@ outputs:
     description: "Number of failed checks"
     value: ${{ steps.process-results.outputs.fail }}
   warn:
-    description: "Number of warning checks"
+    description: >-
+      Number of warning checks, of both kinds. Unchanged since schemaVersion 1; use
+      advisory and not-exercised to tell them apart.
     value: ${{ steps.process-results.outputs.warn }}
+  advisory:
+    description: "Number of warning checks that found something advisory about the anchor"
+    value: ${{ steps.process-results.outputs.advisory }}
+  not-exercised:
+    description: >-
+      Number of warning checks that never reached a verdict, so they report a limit of the
+      run rather than anything about the anchor.
+    value: ${{ steps.process-results.outputs.not-exercised }}
   total:
     description: "Total number of checks executed"
     value: ${{ steps.process-results.outputs.total }}
@@ -147,17 +157,26 @@ runs:
           }
           const report = JSON.parse(fs.readFileSync(reportFile, "utf-8"));
           const results = report.results || [];
-          let pass = 0, fail = 0, warn = 0;
+          // schemaVersion 2 marks a warn the run could not exercise with exercised:false.
+          // Such a result reports a limit of the run, not a finding about the anchor, so it
+          // is counted and listed apart from advisory warnings. On a v1 report the field is
+          // absent and every warn counts as advisory, which is what v1 could express.
+          const isNotExercised = (r) => r.status === "warn" && r.exercised === false;
+          let pass = 0, fail = 0, warn = 0, notExercised = 0;
           for (const r of results) {
             if (r.status === "pass") pass++;
             else if (r.status === "fail") fail++;
-            else if (r.status === "warn") warn++;
+            else if (r.status === "warn") {
+              warn++;
+              if (isNotExercised(r)) notExercised++;
+            }
           }
+          const advisory = warn - notExercised;
           const total = results.length;
 
           const ghOutput = process.env.GITHUB_OUTPUT;
           if (ghOutput) {
-            fs.appendFileSync(ghOutput, `pass=${pass}\nfail=${fail}\nwarn=${warn}\ntotal=${total}\n`);
+            fs.appendFileSync(ghOutput, `pass=${pass}\nfail=${fail}\nwarn=${warn}\nadvisory=${advisory}\nnot-exercised=${notExercised}\ntotal=${total}\n`);
           }
 
           const summaryFile = process.env.GITHUB_STEP_SUMMARY;
@@ -166,7 +185,8 @@ runs:
             md += `| Status | Count |\n| --- | --- |\n`;
             md += `| Passed | ${pass} |\n`;
             md += `| Failed | ${fail} |\n`;
-            md += `| Warnings | ${warn} |\n`;
+            md += `| Warnings | ${advisory} |\n`;
+            md += `| Not Exercised | ${notExercised} |\n`;
             md += `| **Total** | **${total}** |\n\n`;
 
             const failures = results.filter(r => r.status === "fail");
@@ -179,12 +199,23 @@ runs:
               md += `\n`;
             }
 
-            const warnings = results.filter(r => r.status === "warn");
+            const warnings = results.filter(r => r.status === "warn" && !isNotExercised(r));
             if (warnings.length > 0) {
               md += `#### Warnings\n\n`;
               md += `| Check ID | Description | Severity | Message |\n| --- | --- | --- | --- |\n`;
               for (const w of warnings) {
                 md += `| \`${w.id}\` | ${w.description} | ${w.severity} | ${w.message} |\n`;
+              }
+              md += `\n`;
+            }
+
+            const skipped = results.filter(isNotExercised);
+            if (skipped.length > 0) {
+              md += `#### Not Exercised\n\n`;
+              md += `These checks did not reach a verdict, so they report nothing about this anchor.\n\n`;
+              md += `| Check ID | Description | Message |\n| --- | --- | --- |\n`;
+              for (const s of skipped) {
+                md += `| \`${s.id}\` | ${s.description} | ${s.message} |\n`;
               }
               md += `\n`;
             }
