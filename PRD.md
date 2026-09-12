@@ -86,18 +86,20 @@ Given an anchor's home domain, the tool supports:
    - Outputs metrics (`pass`, `fail`, `warn`, `total`, `report-path`).
    - Automatically writes summary tables to `$GITHUB_STEP_SUMMARY` and uploads report artifacts.
 
-## Phase 3: Public Dashboard (in progress)
+## Phase 3: Public Dashboard (delivered)
 
 Extends the tool from something a developer runs to a neutral, continuously published trust
 signal. Design in [`docs/dashboard-design.md`](./docs/dashboard-design.md); delivered in
-five scoped increments, of which the first two are complete.
-
-**Delivered:**
+five scoped increments, all complete.
 
 9. **Anchor opt-in registry** (`registry/`)
    - `registry/anchors.json` as the single source of crawlable anchors — no discovery, no
      scraping. An anchor not listed with `"enabled": true` is never validated or published.
    - JSON Schema enforced in CI, plus a reachability check on domains a pull request adds.
+   - Domain ownership proved by an ed25519 signature over a canonical challenge bound to
+     domain, network, and registration date, verified against the `SIGNING_KEY` fetched
+     live from the anchor's `stellar.toml`. Anchors publishing no `SIGNING_KEY` fall back
+     to maintainer review.
    - Opt-out by flag rather than deletion, so the record of who was listed stays auditable.
 
 10. **Automated validation runner and results pipeline** (`scripts/crawl/`, `.github/workflows/dashboard-crawl.yml`)
@@ -109,13 +111,21 @@ five scoped increments, of which the first two are complete.
     - A leg or anchor that fails is published as *not run* rather than omitted, so the data
       never implies checks passed that never executed.
 
-**Remaining:**
+11. **Dashboard web app** (`dashboard/`, `.github/workflows/dashboard-deploy.yml`)
+    - Static site — plain HTML, CSS, and ES modules, no build step — deployed to GitHub
+      Pages with the crawled data merged in at deploy time.
+    - Directory view reading `summary.json`: headline metrics, search by domain, network
+      and status filters, per-anchor pass ratio and a sparkline of the last seven runs.
+    - Per-anchor detail view reading that anchor's `latest.json`: failing and warning
+      checks surfaced first, then every check grouped by SEP, with the raw report
+      downloadable.
 
-- **Dashboard web app** — the static frontend reading `summary.json`: overview and
-  directory listing, then the per-anchor detail view. Until this lands the pipeline
-  produces data on schedule but nothing is browsable.
-- **On-demand re-check trigger** — `workflow_dispatch` with a per-domain input and rate
-  limiting, so an operator can re-validate after shipping a fix.
+12. **On-demand re-check trigger** (`scripts/crawl/rate-limit.mjs`)
+    - `workflow_dispatch` on the crawl workflow taking a `domain` and optional `network`,
+      so an operator can re-validate after shipping a fix instead of waiting for midnight.
+    - Gated on the registry: only a registered, enabled domain can be re-checked.
+    - Durable 6-hour per-domain cooldown, derived from the archived report timestamp rather
+      than workflow state, so it survives lost runs and fresh runners.
 
 ## Out of Scope / Future Work
 

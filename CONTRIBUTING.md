@@ -17,6 +17,8 @@ For higher-level design decisions, tech stack rationale, and system architecture
   - [4. Add Unit Tests](#4-add-unit-tests)
   - [5. Validate Build & Tests](#5-validate-build--tests)
 - [Registering an Anchor for the Public Dashboard](#registering-an-anchor-for-the-public-dashboard)
+- [Working on the Dashboard Web App](#working-on-the-dashboard-web-app)
+- [Commit Message Convention](#commit-message-convention)
 - [Submitting a Pull Request](#submitting-a-pull-request)
 
 ---
@@ -113,18 +115,24 @@ sep-compliance-validator/
       html.ts         # Standalone HTML report renderer
       json.ts         # JSON output formatter
       table.ts        # Terminal table renderer (cli-table3)
+  dashboard/          # Public dashboard web app — static, no build step
+    index.html        # Directory view plus the #/anchor/<domain> detail route
+    app.js            # DOM wiring, routing, and data fetching
+    dashboard-lib.mjs # Pure view logic (metrics, filters, grouping) — the tested part
+    style.css         # Theming via [data-theme] and CSS custom properties
   registry/           # Anchor opt-in registry (see registry/README.md)
   scripts/            # Registry tooling and the dashboard crawler (scripts/crawl/)
   test/               # Unit tests (Vitest) — one suite per checker, plus core,
-                      # renderers, CLI options, public API exports, registry, and crawler
+                      # renderers, CLI options, public API exports, registry, crawler,
+                      # and dashboard view logic
   ARCHITECTURE.md     # Technical stack and architecture details
   PRD.md              # Requirements and scope document
   package.json
   tsconfig.json
 ```
 
-`registry/` and `scripts/` are repository infrastructure, not part of the published
-package — `package.json` sets `"files": ["dist"]`.
+`dashboard/`, `registry/`, and `scripts/` are repository infrastructure, not part of the
+published package — `package.json` sets `"files": ["dist"]`.
 
 Refer to [ARCHITECTURE.md](./ARCHITECTURE.md) for full details on why these technologies and design boundaries were selected.
 
@@ -317,9 +325,11 @@ opt in by adding an entry to [`registry/anchors.json`](./registry/anchors.json).
 that is not listed there is never crawled and never published — there is no discovery or
 scraping.
 
-See [`registry/README.md`](./registry/README.md) for the entry format, how the two CI
-checks on a registration pull request work, how domain ownership is confirmed, and how to
-opt out again.
+A registration also carries a signed ownership proof in `registry/proofs/`, generated with
+`scripts/sign-registry-proof.mjs` and verified in CI against the `SIGNING_KEY` fetched from
+the anchor's live `stellar.toml`. See [`registry/README.md`](./registry/README.md) for the
+entry format, how to generate the proof, how the two CI checks on a registration pull
+request work, and how to opt out again.
 
 To check the registry before pushing:
 
@@ -330,6 +340,78 @@ npm run validate:registry
 Note this is contributor-facing infrastructure rather than part of the published package:
 the registry, its schema, and `scripts/registry-*.mjs` are not shipped in the npm tarball
 (`package.json` sets `"files": ["dist"]`).
+
+---
+
+## Working on the Dashboard Web App
+
+[`dashboard/`](./dashboard) is the public dashboard: plain HTML, CSS, and ES modules with
+no framework and no build step. Serve it over HTTP rather than opening `index.html` from
+the filesystem — ES module imports are blocked on `file://`:
+
+```bash
+npx serve dashboard        # or: python3 -m http.server -d dashboard
+```
+
+The checked-in `dashboard/data/` is sample data. It is what the deployed site falls back to
+before the first crawl publishes anything, and it is what you develop against locally. To
+work against real data, copy `data/` down from the `dashboard-data` branch:
+
+```bash
+git fetch origin dashboard-data
+git show origin/dashboard-data:data/summary.json > dashboard/data/summary.json
+```
+
+Put logic worth testing in [`dashboard/dashboard-lib.mjs`](./dashboard/dashboard-lib.mjs)
+as a pure function and cover it in
+[`test/dashboard.test.mjs`](./test/dashboard.test.mjs); keep `app.js` to DOM wiring. The
+split is what lets the view logic run under the same `npm test` as the rest of the repo,
+with no browser or DOM shim. Note that these suites are not under the `src/**` coverage
+gate, so a thin `dashboard-lib.mjs` will not show up as a coverage failure — test it
+because it is the part that can be wrong, not because CI will catch you.
+
+Two constraints to keep in mind when editing:
+
+- `validateReportSchema` hardcodes the highest `REPORT_SCHEMA_VERSION` it accepts, because
+  a browser cannot import the TypeScript source. Bumping the schema version means updating
+  it here too.
+- The deploy workflow copies the crawled `data/` tree over `dashboard/data/`, so anything
+  the app fetches must live under that path relative to the page.
+
+---
+
+## Commit Message Convention
+
+Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org/).
+This is not a style preference: `.releaserc.json` runs semantic-release with the
+`conventionalcommits` preset on every push to `main`, so the message prefix is what decides
+the version bump and what appears in `CHANGELOG.md`. A message outside the convention
+releases nothing and records nothing.
+
+```
+<type>(<optional scope>): <summary>
+```
+
+| Type | Release | Changelog section |
+|---|---|---|
+| `feat` | minor | Features |
+| `fix` | patch | Bug Fixes |
+| `perf` | patch | Performance Improvements |
+| `revert` | patch | Reverts |
+| `docs` | none | Documentation |
+| `refactor`, `test`, `build`, `ci`, `chore`, `style` | none | hidden |
+
+A breaking change is marked with `!` after the type (`feat!:`) or a `BREAKING CHANGE:`
+footer, and triggers a major bump.
+
+Those eleven types are the complete set `.releaserc.json` declares. **A type outside that
+list is silently dropped** — it neither bumps the version nor appears in the changelog, and
+nothing warns you. `main` already carries `deps:` commits, which is not a declared type, so
+those upgrades are invisible in the generated notes; use `build(deps):` or `chore(deps):`
+for dependency work instead.
+
+Scopes in use track the area changed rather than a fixed list — `dashboard`, `registry`,
+`sep10`, `report`, `crawl`, `action`. Use one when it narrows the summary usefully.
 
 ---
 

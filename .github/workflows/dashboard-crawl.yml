@@ -10,10 +10,10 @@ name: Dashboard crawl
 #     summary.json can be regenerated from it (section 4.2)
 #   - main's CI is never triggered by data changes
 #
-# Serving that branch over GitHub Pages (the target decided in section 4.4) is wired up by
-# the frontend issue, which owns the site layout - one repository has one Pages site, so
-# deciding it here would pre-empt that work. Until then the published data is readable
-# from the branch itself.
+# This workflow never touches the Pages site. dashboard-deploy.yml serves that branch over
+# GitHub Pages (the target decided in section 4.4), merging this archive with the static
+# assets on main at deploy time - so a daily crawl publishes data without redeploying the
+# site, and a site change does not rewrite the archive.
 on:
   schedule:
     # 00:00 UTC daily, per section 5.1.

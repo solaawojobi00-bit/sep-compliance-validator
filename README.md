@@ -24,16 +24,20 @@ for design details.
 - Opt-in mainnet production validation guard (`--i-understand-this-touches-production`).
 - Reusable GitHub Action composite workflow (`action.yml`) with job summaries and step outputs.
 
-**Public dashboard — data layer live, frontend not yet built:**
-- Anchor opt-in registry (`registry/anchors.json`), schema-validated in CI. An anchor is
-  only ever crawled if it has opted in — see [`registry/README.md`](./registry/README.md).
+**Public dashboard (Phase 3) — delivered end to end:**
+- Anchor opt-in registry (`registry/anchors.json`), schema-validated in CI, with domain
+  ownership proved by a signed challenge against the anchor's published `SIGNING_KEY`. An
+  anchor is only ever crawled if it has opted in — see
+  [`registry/README.md`](./registry/README.md).
 - Daily crawler publishing per-anchor compliance reports and a rolled-up `summary.json`
   to the `dashboard-data` branch.
-- The web app that reads that data is still to come, so there is nothing to browse yet.
+- Static dashboard web app (`dashboard/`) deployed to GitHub Pages: directory listing with
+  search, network and status filters, 7-run sparklines, and a per-anchor detail view
+  grouping every check by SEP.
+- On-demand re-check via `workflow_dispatch` on the crawl workflow, gated by the registry
+  and a durable 6-hour per-domain cooldown.
 
 **Future Phases:**
-- Dashboard frontend: overview/directory listing and per-anchor detail views (see [`docs/dashboard-design.md`](./docs/dashboard-design.md)).
-- On-demand re-check trigger with rate limiting.
 - SEP-6 programmatic transfer flows.
 
 ## Install & use
@@ -225,8 +229,21 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for what to run before pushing.
 ### Getting your anchor onto the public dashboard
 
 Anchors are only validated and published if they opt in. Open a pull request adding an
-entry to [`registry/anchors.json`](./registry/anchors.json) — see
+entry to [`registry/anchors.json`](./registry/anchors.json), plus an ownership proof signed
+with the secret key behind the `SIGNING_KEY` your `stellar.toml` publishes:
+
+```bash
+node scripts/sign-registry-proof.mjs <domain> <network> <addedAt> <SECRET_KEY> \
+  --out registry/proofs/<domain>.<network>.json
+```
+
+CI verifies that signature against the `SIGNING_KEY` it fetches live from your domain. See
 [`registry/README.md`](./registry/README.md) for the entry format, how the two CI checks on
-a registration PR work, and how to opt out again.
+a registration PR work, how to trigger an on-demand re-check after shipping a fix, and how
+to opt out again.
+
+The dashboard itself is the static app in [`dashboard/`](./dashboard), deployed to GitHub
+Pages by `.github/workflows/dashboard-deploy.yml`, which merges those assets with the
+crawled data from the `dashboard-data` branch at deploy time.
 
 

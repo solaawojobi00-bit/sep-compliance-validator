@@ -1,10 +1,11 @@
 # Design Proposal: Public Anchor Compliance Dashboard
 
 ## Status
-- **Status:** Partially implemented — sub-issues 1 and 2 of 5 are merged (see [§7](#7-follow-up-issues-breakdown-tiered--scoped)).
-  The registry and the daily crawler exist and run; no frontend has been built, so nothing
-  is rendered yet. Sections describing those two pieces now document deployed behaviour
-  rather than a proposal.
+- **Status:** Implemented — all five sub-issues are merged (see [§7](#7-follow-up-issues-breakdown-tiered--scoped)).
+  The registry, the daily crawler, the web app, and the on-demand re-check trigger are all
+  deployed. This document is now a record of what was built and why, not a proposal;
+  where the implementation settled a question this document left open, the section says so.
+  [`ARCHITECTURE.md`](../ARCHITECTURE.md) is the shorter description of the deployed system.
 - **Related Issue:** [#16](https://github.com/solaawojobi00-bit/sep-compliance-validator/issues/16)
 - **Target Phase:** Phase 3 (as identified in `PRD.md`)
 
@@ -47,20 +48,37 @@ Anchors opt in via GitOps by submitting a pull request to add an entry to a vers
 ```
 
 ### 3.2 Domain Verification & Ownership
+
+**Implemented (#166): the signed-challenge option below, not the `[VALIDATOR]` TOML key.**
 To prevent unauthorized parties from registering third-party domains:
+
 1. **Automated TOML Check:** The registration PR triggers a GitHub Action workflow that verifies `https://<domain>/.well-known/stellar.toml` is reachable and parses successfully.
-2. **Opt-In Signal:** The anchor's `stellar.toml` may optionally declare:
-   ```toml
-   [VALIDATOR]
-   PUBLIC_DASHBOARD = true
-   ```
-   Or alternatively, registration PRs must be authored by verified domain maintainers (or verified via a signed SEP-10 challenge using the anchor's published `SIGNING_KEY`).
+2. **Signed ownership proof:** The operator signs the canonical challenge
+   `stellar-anchor-registry:<domain>:<network>:<addedAt>` with the secret key behind the
+   `SIGNING_KEY` their `stellar.toml` publishes, and commits the result to
+   `registry/proofs/<domain>.<network>.json`. CI verifies that ed25519 signature against
+   the key it fetches live from the domain.
+
+This option was chosen over the `[VALIDATOR] PUBLIC_DASHBOARD = true` TOML flag this
+section originally floated, for two reasons. A TOML flag proves only that whoever can edit
+the file wants to be listed, whereas a signature proves control of the key SEP-10
+authentication already turns on. And it asks anchors to publish a non-standard key invented
+by this project; binding the proof to domain, network, and `addedAt` gets replay protection
+without adding anything to anyone's `stellar.toml`.
+
+An anchor whose `stellar.toml` declares no `SIGNING_KEY` — SEP-1 makes it optional — cannot
+be verified this way and falls back to maintainer review rather than being refused.
 
 ### 3.3 Opt-Out
-An anchor operator can opt out at any time by:
-- Setting `"enabled": false` via a PR against `registry/anchors.json`.
-- Setting `PUBLIC_DASHBOARD = false` in their `stellar.toml`.
-The automated runner will cease checking the domain and archive or hide historical entries based on operator preference.
+An anchor operator opts out by setting `"enabled": false` via a PR against
+`registry/anchors.json`. The crawler stops visiting the domain on merge, and an on-demand
+re-check of a disabled entry is refused ([§5.1](#51-cadence)).
+
+The `PUBLIC_DASHBOARD = false` TOML alternative this section originally listed was dropped
+along with its opt-in counterpart in [§3.2](#32-domain-verification--ownership) — the
+registry flag is the single switch. The entry is kept rather than deleted so the record of
+who was listed stays auditable; removing historical results as well is a maintainer action,
+requested in the PR.
 
 ---
 
@@ -100,26 +118,45 @@ To eliminate server hosting costs and retain high availability, results will be 
 - **Latest Report Pointer:**
   `data/reports/<domain>/<network>/latest.json`
 - **Aggregated Dashboard Index (`data/summary.json`):**
-  A generated index containing summaries for fast loading:
+  A generated index containing summaries for fast loading. As built by
+  `scripts/crawl/aggregate-summary.mjs`:
   ```json
   [
     {
       "domain": "testanchor.stellar.org",
       "network": "testnet",
       "lastChecked": "2026-09-01T00:00:00Z",
+      "status": "pass",
+      "completeness": "full",
       "summary": {
         "pass": 10,
         "fail": 0,
-        "warn": 0,
-        "total": 10
+        "warn": 1,
+        "notVerified": 1,
+        "total": 11
       },
       "history": [
-        { "timestamp": "2026-08-31T00:00:00Z", "status": "pass" },
-        { "timestamp": "2026-09-01T00:00:00Z", "status": "pass" }
+        { "timestamp": "2026-08-31T00:00:00Z", "status": "pass", "completeness": "full" },
+        { "timestamp": "2026-09-01T00:00:00Z", "status": "pass", "completeness": "full" }
       ]
     }
   ]
   ```
+
+  Two fields the original sketch above did not have, both added because omitting them
+  would let the dashboard overstate an anchor. `completeness` is `"partial"` when a leg did
+  not execute — a partial run has fewer checks and so a *higher* pass ratio, and would
+  out-score a complete one if scored the same way. `notVerified` counts, as a subset of
+  `warn`, the warnings that report a limit of the run rather than a finding about the
+  anchor (`exercised: false` in the `Report`; see *Not exercised vs advisory* in
+  [`ARCHITECTURE.md`](../ARCHITECTURE.md)). Note the name differs from `summarize()`'s
+  `notExercised` in `src/core/report.ts`: `summary.json` predates that rename and keeps its
+  own field name, which is stored data rather than a re-derivable view.
+
+  `buildEntry` emits exactly the fields above. The registry's `name` is *not* among them,
+  though the directory view renders `entry.name` when present and the sample data in
+  `dashboard/data/summary.json` carries it — so on real crawled data the display name is
+  absent and search matches the domain only.
 
 ### 4.3 Retention Policy
 - Retain detailed run JSON reports for **90 days**.
@@ -153,7 +190,17 @@ Rationale:
 
 ### 5.1 Cadence
 - **Scheduled Automated Runs:** Every 24 hours (daily at 00:00 UTC) via scheduled GitHub Actions cron (`0 0 * * *`).
-- **On-Demand Runs:** Anchor maintainers can trigger a re-run via `workflow_dispatch` (or a webhook handler) when deploying fixes, with rate-limiting restricted to once per 6 hours per domain.
+- **On-Demand Runs:** Anchor maintainers trigger a re-run via `workflow_dispatch` on
+  `dashboard-crawl.yml`, passing a `domain` and optional `network`. Implemented in #169; no
+  webhook handler was built, since `workflow_dispatch` needs no service to host.
+
+The 6-hour limit is enforced against the `timestamp` in the anchor's archived
+`latest.json`, not against workflow run history. The archive is durable state the crawler
+already maintains, so the cooldown survives a lost run, a re-created data branch, and a
+fresh runner — a counter held in the workflow would not. Both that check and the registry
+gate live in `scripts/crawl/rate-limit.mjs` rather than in the workflow YAML, so they apply
+to a local `crawl.mjs --domain` run too, and both refuse by exiting non-zero so an
+over-eager re-check is visible as a failed run rather than a silent no-op.
 
 ### 5.2 Failure & Transient Error Mitigation
 To prevent false alarms caused by transient network blips:
@@ -164,7 +211,16 @@ To prevent false alarms caused by transient network blips:
 
 ## 6. Minimal Frontend for v1 Dashboard
 
-The v1 dashboard is a lightweight static web app deployed on GitHub Pages or Cloudflare Pages, reading from `data/summary.json` and individual `latest.json` files.
+**Implemented (#167, #168) in `dashboard/`.** The v1 dashboard is a lightweight static web
+app deployed on GitHub Pages, reading from `data/summary.json` and individual `latest.json`
+files. Both views below are delivered as described, as one page with the detail view on a
+hash route (`#/anchor/<domain>?network=<network>`).
+
+No framework and no bundler were adopted — the app is plain HTML, CSS, and ES modules. The
+whole of it is a JSON fetch and a hash route, which a build toolchain would not make
+smaller or clearer. `.github/workflows/dashboard-deploy.yml` merges the static assets from
+`main` with the crawled `data/` tree from the `dashboard-data` branch at deploy time, so
+the two move on independent schedules.
 
 ### 6.1 Views & Capabilities
 1. **Directory / Overview Page (`/`):**
@@ -193,9 +249,12 @@ To ensure this initiative is delivered safely and incrementally, implementation 
 |---|---|---|---|---|
 | **Sub-Issue 1** | **Anchor Opt-In Registry & Schema Validation** | Low (30 pts) | ✅ Merged (#87) | Add `registry/anchors.json`, define JSON Schema for registry entries, and write CI workflow to validate PR submissions and domain reachability. |
 | **Sub-Issue 2** | **Automated Validation Runner & Results Pipeline** | Medium (80 pts) | ✅ Merged (#88) | Build the daily GitHub Actions runner to iterate through active registry domains, invoke `sep-compliance-validator`, output `Report` JSONs, and compile `data/summary.json`. Publishes to GitHub Pages per [§4.4](#44-hosting-target-decision). |
-| **Sub-Issue 3** | **Dashboard Web App — Overview & Directory Listing** | Medium (80 pts) | ✅ Merged (#167) | Set up static frontend app (Vite/React/HTML), parse `summary.json`, implement table listing with domain search, status filters, and pass/fail badges. Also wires GitHub Pages to serve the `dashboard-data` branch — one repository has one Pages site, so the serving layout is decided here rather than in sub-issue 2. |
+| **Sub-Issue 3** | **Dashboard Web App — Overview & Directory Listing** | Medium (80 pts) | ✅ Merged (#167) | Set up static frontend app (built with plain HTML/CSS/ES modules — see [§6](#6-minimal-frontend-for-v1-dashboard)), parse `summary.json`, implement table listing with domain search, status filters, and pass/fail badges. Also wires the Pages deployment, which publishes these assets with the `dashboard-data` branch's `data/` tree merged in — one repository has one Pages site, so the serving layout is decided here rather than in sub-issue 2. |
 | **Sub-Issue 4** | **Dashboard Web App — Detailed Anchor Report View** | Medium (60 pts) | ✅ Merged (#168) | Implement anchor detail route showing check results grouped by SEP, error message inspection, and link to raw report JSON. |
-| **Sub-Issue 5** | **On-Demand Re-check Trigger & Rate Limiting** | Low (40 pts) | Implemented (#91) | Add `workflow_dispatch` support with durable 6-hour rate limiting to allow maintainers to trigger validation after releasing endpoint fixes. |
+| **Sub-Issue 5** | **On-Demand Re-check Trigger & Rate Limiting** | Low (40 pts) | ✅ Merged (#169) | Add `workflow_dispatch` support with durable 6-hour rate limiting to allow maintainers to trigger validation after releasing endpoint fixes. |
+
+Domain ownership verification ([§3.2](#32-domain-verification--ownership)) was delivered
+separately in #166, after sub-issue 1 had established the registry it guards.
 
 ### Implementation notes from sub-issue 2
 

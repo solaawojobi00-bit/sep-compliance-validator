@@ -100,14 +100,22 @@ sep-compliance-validator/
       html.ts           # responsive standalone HTML dashboard report renderer
       json.ts           # machine-readable JSON report serializer
       table.ts          # CLI ASCII table renderer (cli-table3)
+  dashboard/            # The public dashboard web app - static, no build step
+    index.html          # Both views; the detail view is a hash route, #/anchor/<domain>
+    app.js              # ES module: routing, data fetching, rendering, filters
+    dashboard-lib.mjs   # Pure view logic (metrics, filtering, grouping), unit tested
+    style.css           # Light/dark theming via [data-theme] and CSS custom properties
+    data/               # Fallback sample data, used when dashboard-data has none yet
   registry/             # Anchor opt-in registry - the only source of crawlable domains
     anchors.json        # One entry per anchor per network
     schema.json         # JSON Schema (draft 2020-12) enforced in CI
+    proofs/             # One signed ownership proof per entry, <domain>.<network>.json
     README.md           # Operator-facing opt-in / opt-out instructions
   scripts/
-    registry-lib.mjs    # Registry parsing, normalization, and duplicate detection
+    registry-lib.mjs    # Registry parsing, normalization, duplicates, ownership proofs
     validate-registry.mjs   # Offline schema + duplicate gate (npm run validate:registry)
-    check-registry-domains.mjs # Reachability gate for domains a PR adds or re-enables
+    check-registry-domains.mjs # Reachability + ownership gate for domains a PR adds
+    sign-registry-proof.mjs # Operator-run signer for a registration proof
     render-report.mjs   # Renders a stored Report for the Action's job summary
     crawl/              # The dashboard crawler (see "Dashboard data pipeline" below)
       crawl.mjs         # Entry point: iterate registry, run legs, merge, archive, prune
@@ -116,10 +124,13 @@ sep-compliance-validator/
       merge-legs.mjs      # Merges both legs into one canonical Report
       aggregate-summary.mjs # Regenerates data/summary.json from the archive
       prune-retention.mjs   # 90-day detail retention
+      rate-limit.mjs        # On-demand registry gate and 6-hour per-domain cooldown
       storage-paths.mjs     # Archive layout and path-safety validation
       crawl-markers.mjs     # The crawler's own "leg did not run" marker ids
       legacy-v1-inconclusive.mjs # FROZEN: decodes "unverified" warns in schemaVersion 1 archives
-  test/                 # vitest suites covering checks, core, renderers, CLI, public API, registry, crawler
+  test/                 # vitest suites covering checks, core, renderers, CLI, public API,
+                        # registry (schema, duplicates, ownership proofs), crawler
+                        # (legs, merge, retention, rate limiting), and dashboard view logic
     fixtures/anchor/    # Hermetic self-signed-TLS stand-in for a SEP-1 conformant anchor,
                         # so the Action smoke test does not depend on a third party's uptime
   .github/
@@ -130,7 +141,8 @@ sep-compliance-validator/
       ci.yml            # Build, test, lint, typecheck, coverage gate, actionlint,
                         # dependency audits, pack & action smoke tests
       codeql.yml        # CodeQL security analysis
-      dashboard-crawl.yml # Daily anchor crawl (0 0 * * *)
+      dashboard-crawl.yml # Daily anchor crawl (0 0 * * *) and on-demand re-check
+      dashboard-deploy.yml # Builds dashboard/ + dashboard-data into the Pages site
       dependency-review.yml # Dependency review on pull requests
       live-anchor.yml   # Scheduled run against the live testnet reference anchor
       publish.yml       # npm publish on manual dispatch with provenance attestation
@@ -199,9 +211,11 @@ comparison settles it.
 Reports are persisted — the GitHub Action uploads the JSON report as a build artifact, and
 the dashboard crawler archives raw `Report` JSON with a 90-day detail retention — so a
 consumer reading a report it did not generate needs a way to detect a schema mismatch
-rather than silently mis-parsing it. The crawler is that consumer today: it validates
-`schemaVersion` both on the reports it has just produced and on every archived report it
-reads back to regenerate `summary.json`.
+rather than silently mis-parsing it. There are two such consumers today. The crawler
+validates `schemaVersion` both on the reports it has just produced and on every archived
+report it reads back to regenerate `summary.json`; the dashboard web app validates it on
+every `latest.json` it renders, against a version literal it has to keep in step by hand
+(see *The web app* below).
 
 **Bump `REPORT_SCHEMA_VERSION`** when a change would break a parser written against the
 previous version:
@@ -226,14 +240,14 @@ the field unconditionally.
 
 ## Dashboard data pipeline
 
-The data layer behind the public dashboard is implemented and running. The frontend that
-reads it is not yet built, so nothing is rendered — but the pipeline produces and archives
-data on schedule today. Full design rationale is in
+The public dashboard is delivered end to end: registry, crawler, web app, and on-demand
+re-check. Full design rationale is in
 [`docs/dashboard-design.md`](./docs/dashboard-design.md); this section records what is
 actually deployed.
 
 **Flow:** `registry/anchors.json` → `.github/workflows/dashboard-crawl.yml` (daily,
-`0 0 * * *`) → `scripts/crawl/crawl.mjs` → archive on the `dashboard-data` branch.
+`0 0 * * *`, or on demand) → `scripts/crawl/crawl.mjs` → archive on the `dashboard-data`
+branch → `.github/workflows/dashboard-deploy.yml` → GitHub Pages.
 
 ### The registry is the only input
 
@@ -242,6 +256,22 @@ There is no discovery and no scraping. The registry is schema-validated before i
 so a malformed entry fails the run rather than being crawled — being listed has to be
 something an operator chose, because the dashboard publishes verdicts next to a named
 operator's domain.
+
+Choosing has to be provable, not merely asserted in a pull request, or anyone could list
+someone else's domain. A registration therefore carries a proof file in `registry/proofs/`:
+the operator signs the canonical string
+`stellar-anchor-registry:<domain>:<network>:<addedAt>` with the secret key behind the
+`SIGNING_KEY` their `stellar.toml` publishes, and `check-registry-domains.mjs` verifies that
+ed25519 signature against the key it fetches live from the domain (`registry-lib.mjs`,
+`evaluateOwnershipProof`). Binding the message to all three fields is what stops a proof
+being replayed onto a different network or a re-registration.
+
+A missing, replayed, or mis-signed proof fails the pull request. An anchor whose
+`stellar.toml` declares no `SIGNING_KEY` — SEP-1 makes it optional — cannot be checked this
+way, so it falls back to maintainer review rather than being refused outright. The registry
+deliberately does not ask operators to add a non-standard TOML key such as
+`[VALIDATOR] PUBLIC_DASHBOARD`, which §3.2 of the design doc floated as the alternative: a
+signature proves control of the key SEP-10 already depends on, and invents nothing.
 
 ### Two legs per anchor
 
@@ -303,21 +333,67 @@ a full run, since fewer checks executed means a higher pass ratio.
 `schemaVersion` is validated on read. A stored report newer than the crawler understands is
 skipped and surfaced as a warning, never parsed optimistically.
 
+### On-demand re-checks
+
+`dashboard-crawl.yml` also accepts a `workflow_dispatch` with a `domain` and an optional
+`network`, so an operator who has shipped a fix does not wait for midnight UTC. With no
+`domain` the dispatch is an ordinary full crawl.
+
+Two gates apply, both in `scripts/crawl/rate-limit.mjs` rather than in the workflow YAML,
+so they hold for a local `crawl.mjs --domain` run too:
+
+- **Registry gate** (`validateOnDemandTarget`). The domain must be present *and* enabled.
+  An unregistered domain and a disabled one are rejected with different messages, because
+  they are different mistakes — one is "you never opted in", the other "you opted out".
+  Without this gate the dispatch input would be a way to make the crawler visit any domain
+  on demand, which is precisely what the opt-in registry exists to prevent.
+- **6-hour cooldown** (`checkRateLimit`). Derived from the `timestamp` inside the archived
+  `latest.json` for that domain and network, not from workflow run history or any counter
+  the workflow keeps. The archive is the durable state the crawler already maintains, so
+  the limit survives a lost run, a re-created branch, and a fresh runner; anything held in
+  the workflow would not. The refusal names the exact instant the next run is permitted.
+
+Both refusals exit non-zero, so an over-eager re-check shows as a failed run rather than
+silently doing nothing. `crawl.mjs` accepts `--force` (`--skip-rate-limit`) to bypass the
+cooldown for a maintainer running it locally; the workflow never passes it.
+
+### The web app
+
+`dashboard/` is plain HTML, CSS, and ES modules — no framework, no bundler, no build step.
+The whole app is a `summary.json` fetch and a hash route, and a build pipeline would add a
+toolchain to maintain and a compiled artifact to review for no behaviour the static files
+do not already have.
+
+Two views share one page. The directory (`/`) reads `data/summary.json` and renders the
+metric row, search, network and status filters, and a 7-run sparkline per anchor. The
+detail view (`#/anchor/<domain>?network=<network>`) reads that anchor's
+`data/reports/<domain>/<network>/latest.json`, surfaces everything that failed or warned in
+one section, and groups every `CheckResult` by SEP below it.
+
+`schemaVersion` is validated on read here exactly as it is in the crawler: a report newer
+than the app understands is refused with an explanatory message, never rendered
+optimistically. One maintenance note — the browser cannot import `REPORT_SCHEMA_VERSION`
+from the TypeScript source, so `validateReportSchema` carries the highest supported version
+as a literal. **Bumping `REPORT_SCHEMA_VERSION` means updating `dashboard-lib.mjs` too**, or
+the site starts refusing the reports the crawler has just published.
+
+The view logic that is worth testing — metrics, filtering, sparkline windowing, SEP
+grouping, schema validation — lives in `dashboard/dashboard-lib.mjs` as pure functions with
+no DOM access, which is what lets `test/dashboard.test.mjs` cover it under the same vitest
+run as everything else. `app.js` holds only the DOM wiring.
+
 ### Hosting
 
-**GitHub Pages**, decided in [`docs/dashboard-design.md`](./docs/dashboard-design.md) §4.4.
-Wiring Pages to serve the `dashboard-data` branch belongs to the frontend work — one
-repository has one Pages site, so its layout is decided there. Until then the published
-data is readable from the branch itself.
+**GitHub Pages**, decided in [`docs/dashboard-design.md`](./docs/dashboard-design.md) §4.4
+and now wired up. `dashboard-deploy.yml` checks out `main` and the `dashboard-data` branch,
+copies the crawled `data/` tree in alongside the static assets, and deploys the combined
+directory. Data and app therefore ship from separate branches on separate schedules — a
+daily crawl does not redeploy the site, and a CSS change does not touch the archive. If the
+data branch does not exist yet, the sample data committed under `dashboard/data/` is served
+instead, so the site renders on a fresh clone and before the first crawl.
 
 ## Remaining Work
 
-- **Dashboard frontend:** the static web app that reads `data/summary.json` — overview and
-  directory listing, then the per-anchor detail view. This is what makes the pipeline above
-  visible; it is the next piece of Phase 3.
-- **On-demand re-check trigger:** `workflow_dispatch` with a per-domain input and rate
-  limiting, so an operator can re-validate after shipping a fix. The workflow accepts a
-  manual trigger today, but with no domain input and no rate limiting.
 - **Retiring the v1 inconclusive heuristic:** `CheckResult.exercised` (#124) replaced the
   message-text heuristic for reports the CLI produces now. What remains is
   `scripts/crawl/legacy-v1-inconclusive.mjs`, which decodes schemaVersion 1 reports still
