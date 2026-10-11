@@ -192,7 +192,9 @@ The action:
 
 ## Publishing to npm
 
-Releases are versioned and tagged automatically on `main` via semantic-release (`.github/workflows/release.yml`). Publishing the package to npm is a manual, deliberate action triggered via `workflow_dispatch` in `.github/workflows/publish.yml`, which verifies the commit matches a released version tag, generates an npm provenance attestation (`--provenance`), and publishes using the `NPM_TOKEN` secret.
+Releases are versioned and tagged automatically on `main` via semantic-release (`.github/workflows/release.yml`). A release writes nothing back to `main` — `main` is protected and the workflow's token cannot push to it — so the release notes for each version live on the [GitHub release](https://github.com/solaawojobi00-bit/sep-compliance-validator/releases) rather than in a committed `CHANGELOG.md`, and the `version` in `package.json` on `main` is not the released version. The `v<version>` tag is the record of what was released.
+
+Publishing the package to npm is a manual, deliberate action triggered via `workflow_dispatch` in `.github/workflows/publish.yml`. It refuses to publish a commit that carries no release tag, takes the version to publish from that tag, generates an npm provenance attestation (`--provenance`), and publishes using the `NPM_TOKEN` secret.
 
 > [!NOTE]
 > Publishing requires the repository secret `NPM_TOKEN` to be configured with an npm access token that has publishing permissions for `sep-compliance-validator`.

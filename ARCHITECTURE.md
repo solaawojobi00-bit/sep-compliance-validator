@@ -109,6 +109,7 @@ sep-compliance-validator/
     validate-registry.mjs   # Offline schema + duplicate gate (npm run validate:registry)
     check-registry-domains.mjs # Reachability gate for domains a PR adds or re-enables
     render-report.mjs   # Renders a stored Report for the Action's job summary
+    release-version.mjs # Resolves the version to publish from the release tag on HEAD
     crawl/              # The dashboard crawler (see "Dashboard data pipeline" below)
       crawl.mjs         # Entry point: iterate registry, run legs, merge, archive, prune
       build-cli-args.mjs  # Leg definitions and argv construction
@@ -135,7 +136,8 @@ sep-compliance-validator/
       live-anchor.yml   # Scheduled run against the live testnet reference anchor
       publish.yml       # npm publish on manual dispatch with provenance attestation
       registry-validate.yml # Registry schema + domain reachability gates on PRs
-      release.yml       # Semantic-release automated versioning and tagging on main
+      release.yml       # Semantic-release tagging and GitHub releases on main
+                        # (no write-back: main is protected)
       secret-scan.yml   # Gitleaks credential scanning on push and PR
   docs/
     dashboard-design.md # Architecture and data model for hosted dashboard web app
