@@ -27,31 +27,17 @@ jobs:
 
       # This workflow is dispatched manually, so nothing about the ref says which version
       # is being released -- GITHUB_REF_NAME is a branch here, not a tag. What must hold
-      # is that the commit being published is one semantic-release actually released:
-      # package.json's version has a matching tag, and that tag is this commit.
+      # is that the commit being published is one semantic-release actually released, and
+      # since the release never writes the version back to protected main (issue #172) the
+      # tag on this commit is the only record of that -- package.json on main is stale by
+      # design. So the release tag is both the gate and the source of the version.
       #
-      # Without this, dispatching against a branch whose package.json has drifted
-      # publishes a version number to npm that corresponds to no release, and npm
-      # versions are immutable -- there is no undoing it, only deprecating it.
-      - name: Verify the commit is a released version
-        run: |
-          set -euo pipefail
-          pkg="$(node -p "require('./package.json').version")"
-          tag="v${pkg}"
-
-          if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-            echo "::error::package.json is ${pkg}, but no tag ${tag} exists. Publishing is for versions semantic-release has already released."
-            exit 1
-          fi
-
-          tag_sha="$(git rev-list -n 1 "${tag}")"
-          head_sha="$(git rev-parse HEAD)"
-          if [ "${tag_sha}" != "${head_sha}" ]; then
-            echo "::error::tag ${tag} points at ${tag_sha}, but this run is on ${head_sha}. Dispatch against the released commit."
-            exit 1
-          fi
-
-          echo "publishing ${pkg} from ${tag} (${head_sha})"
+      # Without this, dispatching against any commit publishes a version number that
+      # corresponds to no release, and npm versions are immutable -- there is no undoing
+      # it, only deprecating it.
+      - name: Resolve the version from the release tag on this commit
+        id: release
+        run: node scripts/release-version.mjs
 
       - name: Use Node.js 22.x
         uses: actions/setup-node@v7
@@ -62,6 +48,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # The tag is the released version; package.json on main never learns about it. Write
+      # it in here so the tarball, its provenance attestation, and `--version` all report
+      # the version being published. --no-git-tag-version because nothing is committed:
+      # this is a workspace edit for the publish only, discarded with the runner.
+      - name: Set the package version to the released version
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Build
         run: npm run build

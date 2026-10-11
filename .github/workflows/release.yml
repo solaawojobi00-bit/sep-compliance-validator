@@ -9,8 +9,8 @@ on:
     types: [completed]
     branches: [main]
 
-# semantic-release pushes the version commit and tag (contents), and comments on the
-# issues and PRs contained in a release (issues, pull-requests).
+# semantic-release pushes the release tag and cuts the GitHub release (contents), and
+# comments on the issues and PRs contained in a release (issues, pull-requests).
 permissions:
   contents: write
   issues: write
@@ -40,7 +40,9 @@ jobs:
           # every commit since it; a shallow clone silently produces wrong release notes.
           fetch-depth: 0
           # Deliberately unlike every other workflow here, which sets this to false:
-          # @semantic-release/git has to push the version commit and tag back to main.
+          # semantic-release pushes the release tag (`git push --tags`) over this remote.
+          # Only the tag — nothing is written back to main, which branch protection would
+          # reject anyway (GH006), so no plugin here commits to the branch.
           persist-credentials: true
 
       # workflow_run checks out main as it is *now*, which is not necessarily the commit
@@ -77,8 +79,13 @@ jobs:
         run: npm ci
 
       # No NPM_TOKEN and no npm publish here: .releaserc.json sets npmPublish to false,
-      # so this bumps package.json, writes CHANGELOG.md, tags, and cuts a GitHub release.
-      # Publishing to npm stays a deliberate, manual act via publish.yml.
+      # so this analyses the commits, tags the release, and cuts a GitHub release carrying
+      # the notes. Publishing to npm stays a deliberate, manual act via publish.yml, which
+      # derives the version to publish from the tag this step pushes.
+      #
+      # Nothing is committed back to main: main requires pull requests and status checks,
+      # and GITHUB_TOKEN cannot bypass either, so a write-back plugin fails every run
+      # (GH006) after the notes have already been computed. See issue #172.
       - name: Release
         if: steps.guard.outputs.proceed == 'true'
         env:
